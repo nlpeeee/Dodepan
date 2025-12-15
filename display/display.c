@@ -9,6 +9,7 @@
 #include "state.h"
 #include "looper.h"
 #include "display.h"
+#include "i2c_mutex.h"
 
 // Include assets
 #include "display_fonts.h"
@@ -34,15 +35,18 @@
 #define ICON_CENTERED_MARGIN_X ((SSD1306_WIDTH / 2) - (32 / 2))
 
 static alarm_id_t display_dim_alarm_id;
+static volatile bool display_pending = false;  // Flag for deferred display updates
 
 void display_init(ssd1306_t *p) {
     p->external_vcc=false;
+    i2c1_mutex_enter();
     ssd1306_init(p, SSD1306_WIDTH, SSD1306_HEIGHT, SSD1306_ADDRESS, SSD1306_I2C_PORT);
 #if defined (SSD1306_ROTATE)
     ssd1306_rotate(p, 1);
 #endif
     ssd1306_clear(p);
     ssd1306_show(p);
+    i2c1_mutex_exit();
 }
 
 static inline void draw_info_screen(ssd1306_t *p) {
@@ -170,6 +174,86 @@ static inline void draw_contrast_screen(ssd1306_t *p) {
     ssd1306_draw_square(p, 0, 0, 2, 32);
 }
 
+static inline void draw_chord_mode_screen(ssd1306_t *p) {
+    ssd1306_draw_string(p, 0, 0, 1, "Chord Mode:");
+    
+    uint8_t mode = get_chord_mode();
+    
+    // Draw mode name centered and large
+    const char *mode_name = chord_mode_names[mode];
+    uint8_t name_len = strlen(mode_name);
+    uint8_t margin_x = (128 - (name_len * 12)) / 2;  // Center for scale 2 font
+    ssd1306_draw_string(p, margin_x, 14, 2, mode_name);
+    
+    // Draw selection mark if in edit mode
+    if(get_context() == CTX_CHORD) {
+        ssd1306_draw_square(p, margin_x, 30, name_len * 12, 2);
+    } else {
+        // Selection mode - just show indicator
+        ssd1306_draw_square(p, 0, 0, 2, 8);
+    }
+}
+
+static inline void draw_arp_pattern_screen(ssd1306_t *p) {
+    ssd1306_draw_string(p, 0, 0, 1, "Arp Pattern:");
+    
+    uint8_t pattern = get_arp_pattern();
+    
+    // Draw pattern name centered and large
+    const char *pattern_name = arp_pattern_names[pattern];
+    uint8_t name_len = strlen(pattern_name);
+    uint8_t margin_x = (128 - (name_len * 12)) / 2;  // Center for scale 2 font
+    ssd1306_draw_string(p, margin_x, 14, 2, pattern_name);
+    
+    // Draw selection mark if in edit mode
+    if(get_context() == CTX_ARP_PATTERN) {
+        ssd1306_draw_square(p, margin_x, 30, name_len * 12, 2);
+    } else {
+        // Selection mode - just show indicator
+        ssd1306_draw_square(p, 0, 0, 2, 8);
+    }
+}
+
+static inline void draw_arp_speed_screen(ssd1306_t *p) {
+    ssd1306_draw_string(p, 0, 0, 1, "Arp Speed:");
+    
+    uint8_t speed = get_arp_speed();
+    
+    // Draw speed name centered and large
+    const char *speed_name = arp_speed_names[speed];
+    uint8_t name_len = strlen(speed_name);
+    uint8_t margin_x = (128 - (name_len * 12)) / 2;  // Center for scale 2 font
+    ssd1306_draw_string(p, margin_x, 14, 2, speed_name);
+    
+    // Draw selection mark if in edit mode
+    if(get_context() == CTX_ARP_SPEED) {
+        ssd1306_draw_square(p, margin_x, 30, name_len * 12, 2);
+    } else {
+        // Selection mode - just show indicator
+        ssd1306_draw_square(p, 0, 0, 2, 8);
+    }
+}
+
+static inline void draw_arp_octave_screen(ssd1306_t *p) {
+    ssd1306_draw_string(p, 0, 0, 1, "Arp Octaves:");
+    
+    uint8_t octave = get_arp_octave();
+    
+    // Draw octave name centered and large
+    const char *octave_name = arp_octave_names[octave];
+    uint8_t name_len = strlen(octave_name);
+    uint8_t margin_x = (128 - (name_len * 12)) / 2;  // Center for scale 2 font
+    ssd1306_draw_string(p, margin_x, 14, 2, octave_name);
+    
+    // Draw selection mark if in edit mode
+    if(get_context() == CTX_ARP_OCTAVE) {
+        ssd1306_draw_square(p, margin_x, 30, name_len * 12, 2);
+    } else {
+        // Selection mode - just show indicator
+        ssd1306_draw_square(p, 0, 0, 2, 8);
+    }
+}
+
 static inline void draw_synth_edit_screen(ssd1306_t *p) {
     char str[3];
     sprintf(str, "%d", get_argument());
@@ -265,11 +349,79 @@ static inline void draw_scale_store_screen(ssd1306_t *p) {
 void intro_animation(ssd1306_t *p, void (*callback)(void)) {
     for(uint8_t current_frame=0; current_frame < INTRO_FRAMES_NUM; current_frame++) {
         ssd1306_bmp_show_image_with_offset(p, intro_frames[current_frame], INTRO_FRAME_SIZE, ICON_CENTERED_MARGIN_X, 0);
+        i2c1_mutex_enter();
         ssd1306_show(p);
+        i2c1_mutex_exit();
         busy_wait_ms(42); // About 24fps
         ssd1306_clear(p);
     }
     callback();
+}
+
+// Helper to draw the currently playing note indicator
+// Shows note name prominently in the center of the display
+static inline void draw_note_indicator(ssd1306_t *p) {
+    uint16_t active = get_active_pads();
+    if (active == 0) return;  // No pads active
+    
+    uint8_t note = get_last_note();
+    uint8_t note_tonic = note % 12;
+    uint8_t note_octave = note / 12;
+    
+    // Map tonic to alteration (sharps)
+    static const bool alteration_map[12] = {0,1,0,1,0,0,1,0,1,0,1,0};
+    bool is_sharp = alteration_map[note_tonic];
+    
+    // Clear center area (preserve key on left and volume on right)
+    ssd1306_clear_square(p, 28, 0, 90, 32);
+    
+    // Build note string: "C#4" or "G4" etc.
+    // Draw large and centered
+    uint8_t chord_mode = get_chord_mode();
+    
+    // Font widths at scale 1: key_font=24px, diesis_font=10px, octave_font=12px
+    // At scale 1, these fit better. Use scale 1 for the note indicator.
+    const uint8_t note_width = 24;   // key_font width
+    const uint8_t sharp_width = 10;  // diesis_font width  
+    const uint8_t octave_width = 12; // octave_font width
+    const uint8_t chord_width = 12;  // chord symbol width (standard font at scale 1)
+    
+    // Calculate total width
+    uint8_t total_width = note_width;  // Note letter
+    if (is_sharp) total_width += sharp_width;
+    total_width += octave_width;  // Octave
+    if (chord_mode != CHORD_OFF) total_width += chord_width;
+    
+    uint8_t x_start = 28 + (90 - total_width) / 2;  // Center in the middle area
+    uint8_t x = x_start;
+    
+    // Draw note name (scale 1)
+    ssd1306_draw_string_with_font(p, x, 4, 1, key_font, note_names[note_tonic]);
+    x += note_width;
+    
+    // Draw sharp if needed
+    if (is_sharp) {
+        ssd1306_draw_string_with_font(p, x, 0, 1, diesis_font, diesis);
+        x += sharp_width;
+    }
+    
+    // Draw octave number
+    if (note_octave <= 10) {
+        ssd1306_draw_string_with_font(p, x, 4, 1, octave_font, octave_names[note_octave]);
+        x += octave_width;
+    }
+    
+    // Show chord indicator if chord mode is active
+    if (chord_mode != CHORD_OFF) {
+        const char *chord_symbol;
+        switch(chord_mode) {
+            case CHORD_POWER: chord_symbol = "5"; break;
+            case CHORD_TRIAD: chord_symbol = "+"; break;
+            case CHORD_OCTAVE: chord_symbol = "8"; break;
+            default: chord_symbol = ""; break;
+        }
+        ssd1306_draw_string(p, x + 2, 4, 1, chord_symbol);
+    }
 }
 
 #define OFFSET_X    32
@@ -348,30 +500,44 @@ static inline void draw_main_screen(ssd1306_t *p) {
         ssd1306_clear_square(p, 119, 17, 9, 15);
         ssd1306_bmp_show_image_with_offset(p, icon_low_batt_data, icon_low_batt_size, 121, 18);
     }
+    
+    // Visual note indicator - show currently playing note
+    draw_note_indicator(p);
 }
 
 void display_dim(ssd1306_t *p) {
-    ssd1306_contrast(p, 0);
+    // Use try_enter since this may be called from alarm callback (interrupt context)
+    if (i2c1_mutex_try_enter()) {
+        ssd1306_contrast(p, 0);
+        i2c1_mutex_exit();
+    }
+    // If mutex busy, skip - collision is rare and display staying bright briefly is acceptable
 }
 
 int64_t display_dim_callback(alarm_id_t id, void * p) {
-    display_dim(p);
+    display_dim((ssd1306_t *)p);
+    return 0;  // Don't reschedule
 }
 
 void display_wake(ssd1306_t *p) {
+    i2c1_mutex_enter();
     ssd1306_contrast(p, 255);
+    i2c1_mutex_exit();
     if (display_dim_alarm_id) cancel_alarm(display_dim_alarm_id);
     display_dim_alarm_id = add_alarm_in_ms(DISPLAY_DIM_DELAY * 1000, display_dim_callback, p, true);
 }
 
 void display_refresh(ssd1306_t *p) {
+    i2c1_mutex_enter();
     ssd1306_reset(p);
     ssd1306_show(p);
+    i2c1_mutex_exit();
 }
 
 void display_update_contrast(ssd1306_t *p) {
     if (display_dim_alarm_id) cancel_alarm(display_dim_alarm_id);
     uint8_t contrast = get_contrast();
+    i2c1_mutex_enter();
     switch (contrast) {
         case CONTRAST_MIN:
             ssd1306_contrast(p, 0);
@@ -383,12 +549,23 @@ void display_update_contrast(ssd1306_t *p) {
             ssd1306_contrast(p, 255);
         break;
         case CONTRAST_AUTO:
+            i2c1_mutex_exit();  // Release before calling display_wake which acquires mutex
             display_wake(p);
+            return;  // display_wake already released mutex
         break;
     }
+    i2c1_mutex_exit();
 }
 
 void display_draw(ssd1306_t *p) {
+    // Try to acquire I2C lock - if busy, mark as pending and return immediately
+    // This prevents blocking note playback while waiting for IMU reads to complete
+    if (!i2c1_mutex_try_enter()) {
+        display_pending = true;
+        return;
+    }
+    
+    display_pending = false;
     selection_t selection = get_selection();
     context_t context = get_context();
 
@@ -402,6 +579,12 @@ void display_draw(ssd1306_t *p) {
                 case SELECTION_INSTRUMENT:
                 case SELECTION_VOLUME:
                     draw_main_screen(p);
+                break;
+                case SELECTION_CHORD:
+                    draw_chord_mode_screen(p);
+                break;
+                case SELECTION_ARPEGGIO:
+                    draw_arp_pattern_screen(p);
                 break;
                 case SELECTION_LOOPER:
                     draw_looper_screen(p);
@@ -417,6 +600,18 @@ void display_draw(ssd1306_t *p) {
         case CTX_INSTRUMENT:
         case CTX_VOLUME:
             draw_main_screen(p);
+        break;
+        case CTX_CHORD:
+            draw_chord_mode_screen(p);
+        break;
+        case CTX_ARP_PATTERN:
+            draw_arp_pattern_screen(p);
+        break;
+        case CTX_ARP_SPEED:
+            draw_arp_speed_screen(p);
+        break;
+        case CTX_ARP_OCTAVE:
+            draw_arp_octave_screen(p);
         break;
         case CTX_CONTRAST:
             draw_contrast_screen(p);
@@ -447,4 +642,9 @@ void display_draw(ssd1306_t *p) {
     }
 
     ssd1306_show(p);
+    i2c1_mutex_exit();
+}
+
+bool display_is_pending(void) {
+    return display_pending;
 }

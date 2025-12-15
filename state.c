@@ -121,7 +121,7 @@ void set_instrument(uint8_t instrument) {
 
 void set_instrument_up() {
     uint8_t instrument = get_instrument();
-    if(instrument < 8 + NUM_PRESET_SLOTS) { instrument++; }
+    if(instrument < 11 + NUM_PRESET_SLOTS) { instrument++; }
     set_instrument(instrument);
 }
 
@@ -129,6 +129,27 @@ void set_instrument_down() {
     uint8_t instrument = get_instrument();
     if(instrument > 0) { instrument--; }
     set_instrument(instrument);
+}
+
+/* Chord Mode */
+uint8_t get_chord_mode() {
+    return state.chord_mode;
+}
+
+void set_chord_mode(uint8_t mode) {
+    state.chord_mode = mode;
+}
+
+void set_chord_mode_up() {
+    uint8_t mode = get_chord_mode();
+    mode = (mode + 1) % NUM_CHORD_MODES;
+    set_chord_mode(mode);
+}
+
+void set_chord_mode_down() {
+    uint8_t mode = get_chord_mode();
+    mode = (mode == 0) ? NUM_CHORD_MODES - 1 : mode - 1;
+    set_chord_mode(mode);
 }
 
 /* Context */
@@ -482,4 +503,101 @@ void set_degree_down() {
         degree = 0;
     }
     set_degree(step, degree);
+}
+
+/* Visual note indicator */
+
+uint16_t get_active_pads() {
+    return state.active_pads;
+}
+
+void set_pad_active(uint8_t pad, bool active) {
+    if (pad >= 12) return;
+    if (active) {
+        state.active_pads |= (1 << pad);
+    } else {
+        state.active_pads &= ~(1 << pad);
+    }
+}
+
+uint8_t get_last_note() {
+    return state.last_note;
+}
+
+void set_last_note(uint8_t note) {
+    state.last_note = note;
+}
+
+/* Arpeggiator */
+
+uint8_t get_arp_pattern() {
+    return state.arp_pattern;
+}
+
+void set_arp_pattern(uint8_t pattern) {
+    if (pattern < NUM_ARP_PATTERNS) {
+        state.arp_pattern = pattern;
+    }
+}
+
+void set_arp_pattern_up() {
+    uint8_t pattern = get_arp_pattern();
+    if (pattern < NUM_ARP_PATTERNS - 1) {
+        set_arp_pattern(pattern + 1);
+    }
+}
+
+void set_arp_pattern_down() {
+    uint8_t pattern = get_arp_pattern();
+    if (pattern > 0) {
+        set_arp_pattern(pattern - 1);
+    }
+}
+
+uint8_t get_arp_speed() {
+    return state.arp_speed;
+}
+
+void set_arp_speed(uint8_t speed) {
+    if (speed < NUM_ARP_SPEEDS) {
+        state.arp_speed = speed;
+    }
+}
+
+void set_arp_speed_up() {
+    uint8_t speed = get_arp_speed();
+    if (speed < NUM_ARP_SPEEDS - 1) {
+        set_arp_speed(speed + 1);
+    }
+}
+
+void set_arp_speed_down() {
+    uint8_t speed = get_arp_speed();
+    if (speed > 0) {
+        set_arp_speed(speed - 1);
+    }
+}
+
+uint8_t get_arp_octave() {
+    return state.arp_octave;
+}
+
+void set_arp_octave(uint8_t octave) {
+    if (octave < NUM_ARP_OCTAVES) {
+        state.arp_octave = octave;
+    }
+}
+
+void set_arp_octave_up() {
+    uint8_t octave = get_arp_octave();
+    if (octave < NUM_ARP_OCTAVES - 1) {
+        set_arp_octave(octave + 1);
+    }
+}
+
+void set_arp_octave_down() {
+    uint8_t octave = get_arp_octave();
+    if (octave > 0) {
+        set_arp_octave(octave - 1);
+    }
 }

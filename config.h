@@ -97,6 +97,32 @@
 #define LPF_MIN                     64 // Lowest filter cutoff frequency on a 0-127 scale.
 #define HIGHEST_KEY                 99 // Highest note that can be set as root note
 
+/* Chord mode */
+#define CHORD_OFF       0   // Single notes (default behavior)
+#define CHORD_POWER     1   // Root + 5th
+#define CHORD_TRIAD     2   // Root + 3rd + 5th
+#define CHORD_OCTAVE    3   // Root + Octave
+#define NUM_CHORD_MODES 4
+
+/* Arpeggiator */
+#define ARP_OFF         0   // Arpeggiator disabled
+#define ARP_UP          1   // Low to high
+#define ARP_DOWN        2   // High to low
+#define ARP_UP_DOWN     3   // Bounce (low-high-low)
+#define ARP_RANDOM      4   // Random note selection
+#define NUM_ARP_PATTERNS 5
+
+#define ARP_SPEED_SLOW      0   // 750ms (80 BPM)
+#define ARP_SPEED_MEDIUM    1   // 500ms (120 BPM)
+#define ARP_SPEED_FAST      2   // 375ms (160 BPM)
+#define ARP_SPEED_VFAST     3   // 250ms (240 BPM)
+#define NUM_ARP_SPEEDS      4
+
+#define ARP_OCTAVE_1    0   // 1 octave range
+#define ARP_OCTAVE_2    1   // 2 octave range
+#define ARP_OCTAVE_3    2   // 3 octave range
+#define NUM_ARP_OCTAVES 3
+
 #define USE_MIDI                    // Remove this line to disable Midi output
 
 /* Flash memory */

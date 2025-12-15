@@ -5,6 +5,7 @@
 #include "MPU6050.h"
 #include <config.h>
 #include "imu.h"
+#include "i2c_mutex.h"
 
 mpu6050_t mpu6050;
 
@@ -132,7 +133,11 @@ int16_t map_14(int16_t value) {
 }
 
 void imu_task(Imu_data * data) {
+    // Acquire I2C lock before reading IMU data
+    i2c1_mutex_enter();
     read_raw_accel_fixed(&mpu6050);
+    i2c1_mutex_exit();
+    
     struct mpu6050_vector16 *accel = &mpu6050.ra;
 
     // Scale the raw readings.

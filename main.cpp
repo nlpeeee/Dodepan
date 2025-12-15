@@ -15,8 +15,8 @@ typedef uint8_t byte;
 #include "pico/binary_info.h"
 #include "pico/multicore.h"
 #include "sound_i2s.h"
-#include "pra32-u-common.h" // https://github.com/risgk/digital-synth-pra32-u
-#include "pra32-u-synth.h"  // PRA32-U version 2.3.1
+#include "pra32-u2-common.h" // https://github.com/risgk/digital-synth-pra32-u2
+#include "pra32-u2-synth.h"  // PRA32-U2 version 1.5.0 (optimized for RP2350)
 #include "instrument_preset.h"
 #include "encoder.h"        // https://github.com/TuriSc/RP2040-Rotary-Encoder
 #include "button.h"         // https://github.com/TuriSc/RP2040-Button
@@ -27,12 +27,14 @@ typedef uint8_t byte;
 #include "imu.h"
 #include "touch.h"
 #include "looper.h"
+#include "arpeggiator.h"
 #include "display/display.h"
 #include "state.h"
+#include "i2c_mutex.h"
 
 /* Globals */
 
-PRA32_U_Synth g_synth;
+PRA32_U2_Synth g_synth;
 
 state_t* state;
 
@@ -48,6 +50,11 @@ ssd1306_t display;
 static alarm_id_t power_on_alarm_id;
 static alarm_id_t long_press_alarm_id;
 static alarm_id_t flash_write_alarm_id;
+
+// Volatile flags for deferred interrupt processing
+static volatile int8_t encoder_direction = 0;  // 0 = no change, 1 = up, -1 = down
+static volatile bool button_pressed = false;
+static volatile bool button_long_press_pending = false;
 
 void core1_main();
 
@@ -72,7 +79,7 @@ static inline void update_degree() {
 }
 
 void load_user_preset(uint8_t instrument) {
-    uint8_t preset_num = instrument - 9; // Subtracting the 9 default presets
+    uint8_t preset_num = instrument - 12; // Subtracting the 12 default presets (Dodepan + 3 child + 8 PRA32-U)
     for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
         g_synth.control_change(dodepan_program_parameters[i], user_presets[preset_num][i]);
     }
@@ -94,18 +101,54 @@ void update_instrument() {
             }
             set_preset_slot(-1); // No slot selected
         break;
-        case 9:
-        case 10:
-        case 11:
-        case 12:
+        case 1: // Magic Bell - child-friendly preset
+            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+                g_synth.control_change(dodepan_program_parameters[i], magic_bell_preset[i]);
+            }
+            set_preset_slot(-1);
+        break;
+        case 2: // Space Piano - child-friendly preset
+            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+                g_synth.control_change(dodepan_program_parameters[i], space_piano_preset[i]);
+            }
+            set_preset_slot(-1);
+        break;
+        case 3: // Robot Voice - child-friendly preset
+            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+                g_synth.control_change(dodepan_program_parameters[i], robot_voice_preset[i]);
+            }
+            set_preset_slot(-1);
+        break;
+        case 4: // Synthwave - lush 80s style pad
+            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+                g_synth.control_change(dodepan_program_parameters[i], synthwave_preset[i]);
+            }
+            set_preset_slot(-1);
+        break;
+        case 5: // Bleep Bloop - Adventure Time style beeps
+            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+                g_synth.control_change(dodepan_program_parameters[i], bleep_bloop_preset[i]);
+            }
+            set_preset_slot(-1);
+        break;
+        case 14:
+        case 15:
+        case 16:
+        case 17:
             load_user_preset(instrument);
             // Set preset_slot selection to match loaded instrument
-            set_preset_slot(instrument - 9);
+            set_preset_slot(instrument - 14);
         break;
-        default: // case 1-8: load PRA32-U presets
-            g_synth.program_change(instrument - 1);
+        default: // case 6-13: load PRA32-U presets (shifted by 6)
+            g_synth.program_change(instrument - 6);
             set_preset_slot(-1); // No slot selected
         break;
+    }
+    
+    // Force polyphonic mode for chord support (required for chords to work)
+    // This overrides any preset's voice mode setting
+    if (get_chord_mode() != CHORD_OFF) {
+        g_synth.control_change(VOICE_MODE, VOICE_POLYPHONIC);
     }
 }
 
@@ -122,10 +165,11 @@ bool load_flash_data() { // Only called at startup
     
     if((stored_data[MAGIC_NUMBER_LENGTH + 0] > HIGHEST_KEY)          || // Validate key
        (stored_data[MAGIC_NUMBER_LENGTH + 1] > NUM_SCALES -1)        || // Validate scale
-       (stored_data[MAGIC_NUMBER_LENGTH + 2] > 8 + NUM_PRESET_SLOTS) || // Validate instrument
+       (stored_data[MAGIC_NUMBER_LENGTH + 2] > 13 + NUM_PRESET_SLOTS) || // Validate instrument
        (stored_data[MAGIC_NUMBER_LENGTH + 3] > 0x03)                 || // Validate IMU configuration
        (stored_data[MAGIC_NUMBER_LENGTH + 4] > 8)                    || // Validate volume
-       (stored_data[MAGIC_NUMBER_LENGTH + 5] > CONTRAST_AUTO)           // Validate contrast
+       (stored_data[MAGIC_NUMBER_LENGTH + 5] > CONTRAST_AUTO)        || // Validate contrast
+       (stored_data[MAGIC_NUMBER_LENGTH + 6] >= NUM_CHORD_MODES)        // Validate chord mode
     ) { return false; } // Invalid data
 
     // Data is valid and can be loaded safely
@@ -135,6 +179,7 @@ bool load_flash_data() { // Only called at startup
     set_imu_axes(        stored_data[MAGIC_NUMBER_LENGTH + 3]);
     set_volume(          stored_data[MAGIC_NUMBER_LENGTH + 4]);
     set_contrast(        stored_data[MAGIC_NUMBER_LENGTH + 5]);
+    set_chord_mode(      stored_data[MAGIC_NUMBER_LENGTH + 6]);
 
     // Load user presets
     uint8_t offset = MAGIC_NUMBER_LENGTH + 12;
@@ -172,6 +217,7 @@ int64_t write_flash_data(alarm_id_t id, void *) {
     flash_buffer[MAGIC_NUMBER_LENGTH + 3] = get_imu_axes();
     flash_buffer[MAGIC_NUMBER_LENGTH + 4] = get_volume();
     flash_buffer[MAGIC_NUMBER_LENGTH + 5] = get_contrast();
+    flash_buffer[MAGIC_NUMBER_LENGTH + 6] = get_chord_mode();
 
     // Stop here if the stored data is the same as what we're about to write
     const uint8_t *stored_data = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
@@ -181,10 +227,11 @@ int64_t write_flash_data(alarm_id_t id, void *) {
         stored_data[MAGIC_NUMBER_LENGTH + 3] == flash_buffer[MAGIC_NUMBER_LENGTH + 3] &&
         stored_data[MAGIC_NUMBER_LENGTH + 4] == flash_buffer[MAGIC_NUMBER_LENGTH + 4] &&
         stored_data[MAGIC_NUMBER_LENGTH + 5] == flash_buffer[MAGIC_NUMBER_LENGTH + 5] &&
+        stored_data[MAGIC_NUMBER_LENGTH + 6] == flash_buffer[MAGIC_NUMBER_LENGTH + 6] &&
         get_preset_has_changes() == false &&
         get_scale_has_changes()  == false) { return 0; }
 
-    // Reserving bytes MAGIC_NUMBER_LENGTH + [6-11] for future firmware versions
+    // Reserving bytes MAGIC_NUMBER_LENGTH + [7-11] for future firmware versions
 
     // Add user presets to the write buffer
     uint8_t offset = MAGIC_NUMBER_LENGTH + 12;
@@ -268,6 +315,17 @@ uint8_t get_note_by_id(uint8_t id) {
     return get_key() + get_extended_scale(id);
 }
 
+// Chord interval definitions in semitones
+// Power chord: root + perfect 5th (7 semitones)
+// Triad: root + major 3rd (4 semitones) + perfect 5th (7 semitones)
+// Using fixed intervals ensures consistent chord voicing regardless of scale
+#define INTERVAL_THIRD  4   // Major 3rd = 4 semitones
+#define INTERVAL_FIFTH  7   // Perfect 5th = 7 semitones
+
+// Track active chord notes for each pad (for proper note_off)
+static uint8_t active_chord_notes[12][3];  // [pad_id][note_index] - max 3 notes per chord
+static uint8_t active_chord_count[12];     // How many notes active per pad
+
 static const struct sound_i2s_config sound_config = {
     .pio_num         = I2S_PIO_NUM,
     .pin_scl         = I2S_CLOCK_PIN_BASE,
@@ -283,16 +341,96 @@ static inline uint32_t tudi_midi_write24 (uint8_t jack_id, uint8_t b1, uint8_t b
     return tud_midi_stream_write(jack_id, msg, 3);
 }
 
+// Helper functions for playing notes, callable from C (arpeggiator.c)
+extern "C" {
+
+// Helper to play a single note (internal synth + MIDI)
+// Called by both note_on and the arpeggiator
+void play_single_note(uint8_t note, uint8_t velocity) {
+    g_synth.note_on(note, velocity);
+#if defined(USE_MIDI)
+    tudi_midi_write24(0, 0x90, note, velocity);
+#endif
+}
+
+// Helper to stop a single note (internal synth + MIDI)
+// Called by both note_off and the arpeggiator
+void stop_single_note(uint8_t note) {
+    g_synth.note_off(note);
+#if defined(USE_MIDI)
+    tudi_midi_write24(0, 0x80, note, 0);
+#endif
+}
+
+} // extern "C"
+
 void note_on(uint8_t id, uint8_t velocity) {
     uint8_t note = get_note_by_id(id);
-    g_synth.note_on(note, velocity);
-    tudi_midi_write24(0, 0x90, note, velocity);
+    uint8_t chord_mode = get_chord_mode();
+    
+    // Reset active notes for this pad
+    active_chord_count[id] = 0;
+    
+    // For chord modes, we need to send notes with slight delays to ensure
+    // the synth's voice allocator processes each note separately
+    bool needs_delay = (chord_mode != CHORD_OFF);
+    
+    // Always play root note
+    play_single_note(note, velocity);
+    active_chord_notes[id][active_chord_count[id]++] = note;
+    
+    switch(chord_mode) {
+        case CHORD_OFF:
+            // Already played the root note
+            break;
+            
+        case CHORD_POWER: {
+            // Root + Perfect 5th (7 semitones up)
+            uint8_t fifth = note + INTERVAL_FIFTH;
+            if (fifth <= 127) {
+                sleep_us(100);  // Brief delay for voice allocation
+                play_single_note(fifth, velocity);
+                active_chord_notes[id][active_chord_count[id]++] = fifth;
+            }
+            break;
+        }
+        
+        case CHORD_TRIAD: {
+            // Root + Major 3rd (4 semitones) + Perfect 5th (7 semitones)
+            uint8_t third = note + INTERVAL_THIRD;
+            uint8_t fifth = note + INTERVAL_FIFTH;
+            if (third <= 127) {
+                sleep_us(100);  // Brief delay for voice allocation
+                play_single_note(third, velocity);
+                active_chord_notes[id][active_chord_count[id]++] = third;
+            }
+            if (fifth <= 127) {
+                sleep_us(100);  // Brief delay for voice allocation
+                play_single_note(fifth, velocity);
+                active_chord_notes[id][active_chord_count[id]++] = fifth;
+            }
+            break;
+        }
+        
+        case CHORD_OCTAVE: {
+            // Root + Octave (12 semitones up, not scale degrees)
+            uint8_t octave = note + 12;
+            if (octave <= 127) {  // MIDI note range check
+                sleep_us(100);  // Brief delay for voice allocation
+                play_single_note(octave, velocity);
+                active_chord_notes[id][active_chord_count[id]++] = octave;
+            }
+            break;
+        }
+    }
 }
 
 void note_off(uint8_t id) {
-    uint8_t note = get_note_by_id(id);
-    g_synth.note_off(note);
-    tudi_midi_write24(0, 0x80, note, 0);
+    // Stop all notes that were started for this pad
+    for (uint8_t i = 0; i < active_chord_count[id]; i++) {
+        stop_single_note(active_chord_notes[id][i]);
+    }
+    active_chord_count[id] = 0;
 }
 
 void touch_on(uint8_t id) {
@@ -300,8 +438,17 @@ void touch_on(uint8_t id) {
     // The range of velocity is 0-127, but here it's clamped to 64-127
     uint8_t velocity = imu_data.acceleration;
 
-    note_on(id, velocity);
-    looper_record(id, velocity, true);
+    // Track active pad and note for visual feedback
+    set_pad_active(id, true);
+    set_last_note(get_note_by_id(id));
+
+    // Route through arpeggiator if enabled
+    if (arpeggiator_is_enabled()) {
+        arpeggiator_pad_on(id, velocity);
+    } else {
+        note_on(id, velocity);
+        looper_record(id, velocity, true);
+    }
 
     // Since a note_on event can start the looper recording,
     // a display draw needs to be called here.
@@ -311,12 +458,31 @@ void touch_on(uint8_t id) {
 }
 
 void touch_off(uint8_t id) {
-    note_off(id);
-    looper_record(id, 0, false);
+    // Clear pad from active set
+    set_pad_active(id, false);
+
+    // Route through arpeggiator if enabled
+    if (arpeggiator_is_enabled()) {
+        arpeggiator_pad_off(id);
+    } else {
+        note_off(id);
+        looper_record(id, 0, false);
+    }
+    
+#if defined (USE_DISPLAY)
+    display_draw(&display);
+#endif
 }
 
 void all_notes_off() {
     g_synth.all_notes_off();
+    // Stop arpeggiator if running
+    arpeggiator_stop();
+    // Reset chord tracking state
+    for (uint8_t i = 0; i < 12; i++) {
+        active_chord_count[i] = 0;
+        set_pad_active(i, false);  // Clear visual indicator
+    }
 }
 
 // Use the IMU to alter parameters according to device tilting
@@ -383,6 +549,8 @@ void encoder_up() {
 #if defined (USE_DISPLAY)
             switch(get_selection()) {
                 case SELECTION_KEY:
+                case SELECTION_CHORD:
+                case SELECTION_ARPEGGIO:
                 case SELECTION_LOOPER:
                 case SELECTION_IMU_CONFIG:
                     display_refresh(&display);
@@ -402,6 +570,22 @@ void encoder_up() {
         case CTX_INSTRUMENT:
             set_instrument_up();
             update_instrument();
+        break;
+        case CTX_CHORD:
+            set_chord_mode_up();
+            // Force polyphonic mode for chord support
+            if (get_chord_mode() != CHORD_OFF) {
+                g_synth.control_change(VOICE_MODE, VOICE_POLYPHONIC);
+            }
+        break;
+        case CTX_ARP_PATTERN:
+            set_arp_pattern_up();
+        break;
+        case CTX_ARP_SPEED:
+            set_arp_speed_up();
+        break;
+        case CTX_ARP_OCTAVE:
+            set_arp_octave_up();
         break;
         case CTX_IMU_CONFIG:
             set_imu_axes_up();
@@ -463,6 +647,8 @@ void encoder_down() {
 #if defined (USE_DISPLAY)
             switch(get_selection()) {
                 case SELECTION_VOLUME:
+                case SELECTION_CHORD:
+                case SELECTION_ARPEGGIO:
                 case SELECTION_LOOPER:
                 case SELECTION_IMU_CONFIG:
                     display_refresh(&display);
@@ -481,6 +667,22 @@ void encoder_down() {
         case CTX_INSTRUMENT:
             set_instrument_down();
             update_instrument();
+        break;
+        case CTX_CHORD:
+            set_chord_mode_down();
+            // Force polyphonic mode for chord support
+            if (get_chord_mode() != CHORD_OFF) {
+                g_synth.control_change(VOICE_MODE, VOICE_POLYPHONIC);
+            }
+        break;
+        case CTX_ARP_PATTERN:
+            set_arp_pattern_down();
+        break;
+        case CTX_ARP_SPEED:
+            set_arp_speed_down();
+        break;
+        case CTX_ARP_OCTAVE:
+            set_arp_octave_down();
         break;
         case CTX_IMU_CONFIG:
             set_imu_axes_down();
@@ -535,20 +737,23 @@ void encoder_down() {
 void encoder_onchange(rotary_encoder_t *encoder) {
     static long int last_position;
     long int position = encoder->position / 4; // Adjust the encoder sensitivity here
-    int8_t direction = 0;
     if(last_position != position) {
-        direction = (last_position < position ? 1 : -1);
+        // Set flag for main loop to process (avoid I2C/display calls in interrupt context)
+        encoder_direction = (last_position < position ? 1 : -1);
     }
     last_position = position;
-
-    if (direction == 1) {
-        encoder_up();
-    } else if (direction == -1) {
-        encoder_down();
-    }
 }
 
 int64_t on_long_press(alarm_id_t id, void *) {
+    // Just set flag - actual processing happens in main loop
+    // This avoids I2C/display calls in interrupt/alarm context
+    button_long_press_pending = true;
+    long_press_alarm_id = 0;  // Clear the alarm ID since it fired
+    return 0;
+}
+
+// Actual long press handler - called from main loop
+void button_long_press() {
     context_t context = get_context();
     selection_t selection = get_selection();
     switch(context) {
@@ -576,6 +781,10 @@ int64_t on_long_press(alarm_id_t id, void *) {
             set_context(CTX_CONTRAST);
         break;
         case CTX_CONTRAST:
+        case CTX_CHORD:
+        case CTX_ARP_PATTERN:
+        case CTX_ARP_SPEED:
+        case CTX_ARP_OCTAVE:
         case CTX_IMU_CONFIG:
             set_context(CTX_SELECTION);
         break;
@@ -610,17 +819,15 @@ int64_t on_long_press(alarm_id_t id, void *) {
     }
 
 #if defined (USE_DISPLAY)
+    if(get_contrast() == CONTRAST_AUTO) {
+        display_wake(&display);
+    }
     display_draw(&display);
 #endif
-    return 0;
 }
 
-void button_onchange(button_t *button_p) {
-    button_t *button = (button_t*)button_p;
-    if (long_press_alarm_id) cancel_alarm(long_press_alarm_id);
-    if (button->state) return; // Ignore button release
-    long_press_alarm_id = add_alarm_in_ms(LONG_PRESS_THRESHOLD, on_long_press, NULL, true);
-
+// Actual short press handler - called from main loop
+void button_short_press() {
     context_t context = get_context();
     selection_t selection = get_selection();
 
@@ -636,6 +843,12 @@ void button_onchange(button_t *button_p) {
                 case SELECTION_INSTRUMENT:
                     set_context(CTX_INSTRUMENT);
                 break;
+                case SELECTION_CHORD:
+                    set_context(CTX_CHORD);
+                break;
+                case SELECTION_ARPEGGIO:
+                    set_context(CTX_ARP_PATTERN);
+                break;
                 case SELECTION_VOLUME:
                     set_context(CTX_VOLUME);
                 break;
@@ -646,6 +859,9 @@ void button_onchange(button_t *button_p) {
                 case SELECTION_IMU_CONFIG:
                     set_context(CTX_IMU_CONFIG);
                 break;
+                default:
+                    ; // Do nothing
+                break;
             }
         }
         break;
@@ -653,11 +869,22 @@ void button_onchange(button_t *button_p) {
         case CTX_KEY:
         case CTX_SCALE:
         case CTX_INSTRUMENT:
+        case CTX_CHORD:
         case CTX_VOLUME:
         case CTX_CONTRAST:
         case CTX_IMU_CONFIG:
             set_context(CTX_SELECTION);
             request_flash_write();
+        break;
+        case CTX_ARP_PATTERN:
+            set_context(CTX_ARP_SPEED);
+        break;
+        case CTX_ARP_SPEED:
+            set_context(CTX_ARP_OCTAVE);
+        break;
+        case CTX_ARP_OCTAVE:
+            set_context(CTX_SELECTION);
+            // Don't save arp to flash - it resets on boot
         break;
         case CTX_SYNTH_EDIT_PARAM:
             set_context(CTX_SYNTH_EDIT_ARG);
@@ -697,6 +924,23 @@ void button_onchange(button_t *button_p) {
 #endif
 }
 
+// Button callback - runs in interrupt/alarm context, just sets flag
+void button_onchange(button_t *button_p) {
+    button_t *button = (button_t*)button_p;
+    if (button->state) {
+        // Button released - trigger short press if long press hasn't fired
+        if (long_press_alarm_id) {
+            cancel_alarm(long_press_alarm_id);
+            long_press_alarm_id = 0;
+            // Long press didn't fire, so this is a short press
+            button_pressed = true;
+        }
+        return;
+    }
+    // Button pressed - start long press timer (short press triggers on release)
+    long_press_alarm_id = add_alarm_in_ms(LONG_PRESS_THRESHOLD, on_long_press, NULL, true);
+}
+
 void battery_low_detected() {
     set_low_batt(true);
     battery_check_stop(); // Stop the timer
@@ -730,7 +974,8 @@ void bi_decl_all() {
     I2S_CLOCK_PIN_BASE+1, I2S_LRCK_DESCRIPTION));
 }
 
-// Secondary core task
+// Secondary core task - handles audio generation
+// With higher clock speed, single core can handle 4-voice polyphony
 void core1_main() {
     while(true) {
         g_synth.secondary_core_process();
@@ -741,10 +986,11 @@ void core1_main() {
 int main() {
     // Adjust the clock speed to be an even multiplier
     // of the audio sampling frequency
+    // RP2350 runs at higher clock for 4-voice polyphony on single core
     if (SOUND_OUTPUT_FREQUENCY % 11025 == 0) { // For 22.05, 44.1, 88.2 kHz
-        set_sys_clock_khz(135600, false);
+        set_sys_clock_khz(264600, false);  // 264.6 MHz (multiple of 44.1kHz base)
     } else if (SOUND_OUTPUT_FREQUENCY % 8000 == 0) { // For 8, 16, 32, 48, 96, 192 kHz
-        set_sys_clock_khz(147600, false);
+        set_sys_clock_khz(288000, false);  // 288 MHz (multiple of 48kHz)
     }
     stdio_init_all();
 
@@ -771,6 +1017,9 @@ int main() {
     // gpio_pull_up(SSD1306_SCL_PIN);
 
     i2c_init(SSD1306_I2C_PORT, SSD1306_I2C_FREQ);
+    
+    // Initialize mutex for I2C1 bus to prevent collisions between display and IMU
+    i2c1_mutex_init();
 #endif
 
 #if defined (USE_DISPLAY)
@@ -812,10 +1061,11 @@ int main() {
     if(!data_loaded) {
         // Settings not loaded, initialize state with default values
         set_key(60); // C4
-        set_and_extend_scale(0); // Major
+        set_and_extend_scale(SCALE_DEFAULT); // Pentatonic Major - no wrong notes!
         set_scale_unsaved(false);
         set_instrument(0); // Dodepan custom preset
         update_instrument();
+        set_chord_mode(CHORD_OFF); // Single notes by default
         set_imu_axes(0x02); // Filter cutoff modulation enabled, pitch bending disabled
         set_volume(8); // Max value
         set_contrast(CONTRAST_AUTO); // Automatic dimming of display brightness
@@ -844,6 +1094,9 @@ int main() {
 
     // Initialize the looper with a maximum of 512 note events
     looper_init(512);
+
+    // Initialize the arpeggiator
+    arpeggiator_init();
 
     // Initialize the rotary encoder and switch
 #if defined (ENCODER_USE_PULLUPS)
@@ -884,13 +1137,43 @@ int main() {
     while (true) { // Main loop
         mpr121_task();
 
+        // Process deferred encoder events (set from interrupt context)
+        if (encoder_direction != 0) {
+            int8_t dir = encoder_direction;
+            encoder_direction = 0;  // Clear flag first to avoid missing events
+            if (dir == 1) {
+                encoder_down();
+            } else if (dir == -1) {
+                encoder_up();
+            }
+        }
+
+        // Process deferred button events (set from interrupt context)
+        if (button_pressed) {
+            button_pressed = false;
+            button_short_press();
+        }
+        if (button_long_press_pending) {
+            button_long_press_pending = false;
+            button_long_press();
+        }
+
 #if defined (USE_IMU)
         if(get_imu_axes() > 0) {
             imu_task(&imu_data);
             tilt_process();
         }
 #endif
+
+#if defined (USE_DISPLAY)
+        // Process any deferred display updates (when I2C was busy during touch/encoder events)
+        if(display_is_pending()) {
+            display_draw(&display);
+        }
+#endif
+
         looper_task();
+        arpeggiator_task();
 #if defined (USE_MIDI)
         tud_task(); // tinyusb device task
 #endif

@@ -12,10 +12,14 @@ typedef enum context {
     CTX_KEY,
     CTX_SCALE,
     CTX_INSTRUMENT,
+    CTX_CHORD,
     CTX_VOLUME,
     CTX_CONTRAST,
     CTX_LOOPER,
     CTX_IMU_CONFIG,
+    CTX_ARP_PATTERN,
+    CTX_ARP_SPEED,
+    CTX_ARP_OCTAVE,
     CTX_SYNTH_EDIT_PARAM,
     CTX_SYNTH_EDIT_ARG,
     CTX_SYNTH_EDIT_STORE,
@@ -28,6 +32,8 @@ typedef enum selection {
     SELECTION_KEY,
     SELECTION_SCALE,
     SELECTION_INSTRUMENT,
+    SELECTION_CHORD,
+    SELECTION_ARPEGGIO,
     SELECTION_VOLUME,
     SELECTION_LOOPER,
     SELECTION_IMU_CONFIG,
@@ -44,6 +50,7 @@ typedef struct state {
     bool is_alteration;
     uint8_t octave;
     uint8_t instrument;
+    uint8_t chord_mode;             // Chord mode: off, power, triad, octave
     context_t context;              // The encoder affects different parameters
                                     // according to its current context
     selection_t selection;
@@ -69,6 +76,15 @@ typedef struct state {
                                     // 0x3 - (default) both effects are active
 
     bool low_batt;                  // Low battery detected
+
+    // Arpeggiator (not saved to flash)
+    uint8_t arp_pattern;                // Off, Up, Down, Up-Down, Random
+    uint8_t arp_speed;                  // Slow, Medium, Fast, V.Fast
+    uint8_t arp_octave;                 // 1, 2, or 3 octave range
+
+    // Visual note indicator
+    uint16_t active_pads;               // Bitmask of currently touched pads (bits 0-11)
+    uint8_t last_note;                  // Last MIDI note played (for display)
 } state_t;
 
 extern uint8_t get_note_by_id(uint8_t id);
@@ -93,6 +109,11 @@ uint8_t get_instrument();
 void set_instrument(uint8_t instrument);
 void set_instrument_up();
 void set_instrument_down();
+
+uint8_t get_chord_mode();
+void set_chord_mode(uint8_t mode);
+void set_chord_mode_up();
+void set_chord_mode_down();
 
 context_t get_context();
 void set_context(context_t context);
@@ -164,6 +185,26 @@ uint8_t get_degree(uint8_t step);
 void set_degree(uint8_t step, uint8_t degree);
 void set_degree_up();
 void set_degree_down();
+
+// Visual note indicator
+uint16_t get_active_pads();
+void set_pad_active(uint8_t pad, bool active);
+uint8_t get_last_note();
+void set_last_note(uint8_t note);
+
+// Arpeggiator
+uint8_t get_arp_pattern();
+void set_arp_pattern(uint8_t pattern);
+void set_arp_pattern_up();
+void set_arp_pattern_down();
+uint8_t get_arp_speed();
+void set_arp_speed(uint8_t speed);
+void set_arp_speed_up();
+void set_arp_speed_down();
+uint8_t get_arp_octave();
+void set_arp_octave(uint8_t octave);
+void set_arp_octave_up();
+void set_arp_octave_down();
 
 #ifdef __cplusplus
 }

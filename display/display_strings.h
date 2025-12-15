@@ -35,6 +35,10 @@ const char *scale_names[] = {
     "Oriental",
     "Japanese",
     "Chromatic",
+    "* Twinkle",
+    "* Hot Cross",
+    "* Mary Lamb",
+    "* Jingle B.",
     "Custom 1",
     "Custom 2",
     "Custom 3",
@@ -57,6 +61,11 @@ const char *octave_names[] = {
 
 const char *instrument_names[] = {
     "Dodepan",
+    "Magic Bell",
+    "Space Piano",
+    "Robot Voice",
+    "Synthwave",
+    "Bleep Bloop",
     "Fifth Lead",
     "Strings",
     "Brass",
@@ -69,6 +78,34 @@ const char *instrument_names[] = {
     "User 2",
     "User 3",
     "User 4",
+};
+
+const char *chord_mode_names[] = {
+    "Off",
+    "Power",
+    "Triad",
+    "Octave",
+};
+
+const char *arp_pattern_names[] = {
+    "Off",
+    "Up",
+    "Down",
+    "Up-Down",
+    "Random",
+};
+
+const char *arp_speed_names[] = {
+    "Slow",
+    "Medium",
+    "Fast",
+    "V.Fast",
+};
+
+const char *arp_octave_names[] = {
+    "1 Oct",
+    "2 Oct",
+    "3 Oct",
 };
 
 const char *parameter_names[] = {

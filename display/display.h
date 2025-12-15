@@ -20,6 +20,7 @@ void display_dim(ssd1306_t *p);
 void display_wake(ssd1306_t *p);
 void display_refresh(ssd1306_t *p);
 void intro_animation(ssd1306_t *p, void (*callback)(void));
+bool display_is_pending(void);  // Returns true if a display update was deferred
 
 #ifdef __cplusplus
 }
