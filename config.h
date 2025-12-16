@@ -86,6 +86,10 @@
 #define SOUND_OUTPUT_FREQUENCY      48000
 #define PICO_AUDIO_I2S_MONO_OUTPUT
 
+// Event looper limits
+#define LOOPER_MAX_SECONDS          20          // Max loop length in seconds
+#define LOOPER_MAX_EVENTS           512         // Max stored events per loop
+
 #define I2S_PIO_NUM                 0 // 0 for pio0, 1 for pio1
 #define I2S_DATA_PIN                2 // -> I2S DIN
 #define I2S_DATA_DESCRIPTION        "I2S DIN"
@@ -112,11 +116,10 @@
 #define ARP_RANDOM      4   // Random note selection
 #define NUM_ARP_PATTERNS 5
 
-#define ARP_SPEED_SLOW      0   // 750ms (80 BPM)
-#define ARP_SPEED_MEDIUM    1   // 500ms (120 BPM)
-#define ARP_SPEED_FAST      2   // 375ms (160 BPM)
-#define ARP_SPEED_VFAST     3   // 250ms (240 BPM)
-#define NUM_ARP_SPEEDS      4
+#define ARP_SPEED_MIN       50      // Minimum interval (50ms = 300 BPM)
+#define ARP_SPEED_MAX       1000    // Maximum interval (1000ms = 60 BPM)
+#define ARP_SPEED_DEFAULT   250     // Default interval (250ms = 240 BPM)
+#define ARP_SPEED_STEP      25      // Increment/decrement step in ms
 
 #define ARP_OCTAVE_1    0   // 1 octave range
 #define ARP_OCTAVE_2    1   // 2 octave range

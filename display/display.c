@@ -28,7 +28,6 @@
 #include "icon_play.h"
 #include "icon_ready.h"
 #include "icon_pause.h"
-#include "icon_transpose.h"
 // #include "icon_parameters.h" // Unused asset
 #include "icon_low_batt.h"
 
@@ -80,21 +79,6 @@ static inline void draw_info_screen(ssd1306_t *p) {
     free(substrings);
 }
 
-const uint8_t transpose_coords[12][2] = {
-    {15,  1},
-    {22,  3},
-    {27,  8},
-    {29, 15},
-    {27, 22},
-    {22, 27},
-    {15, 29},
-    { 8, 27},
-    { 3, 22},
-    { 1, 15},
-    { 3,  8},
-    { 8,  3}
-};
-
 static inline void draw_looper_screen(ssd1306_t *p) {
     // Draw only the looper icon if in page selection mode
     if(get_context() == CTX_SELECTION) {
@@ -102,30 +86,69 @@ static inline void draw_looper_screen(ssd1306_t *p) {
         return;
     }
 
-    // Rec
+    // Row 1: state icon + label + progress bar
+    uint8_t state_x = 0;
+    uint8_t state_y = 0;
+    const char *state_label = "";
+
     if(looper_is_recording()) {
-        ssd1306_bmp_show_image_with_offset(p, icon_rec_data, icon_rec_size, 58, 10);
+        ssd1306_bmp_show_image_with_offset(p, icon_rec_data, icon_rec_size, state_x, state_y);
+        state_label = "REC";
     } else if(looper_is_playing()) {
-        ssd1306_bmp_show_image_with_offset(p, icon_play_data, icon_play_size, 59, 10);
+        ssd1306_bmp_show_image_with_offset(p, icon_play_data, icon_play_size, state_x, state_y);
+        state_label = "PLAY";
+    } else if(looper_has_recording()) {
+        ssd1306_bmp_show_image_with_offset(p, icon_pause_data, icon_pause_size, state_x, state_y);
+        state_label = "PAU";
     } else {
-        if(looper_has_recording()) {
-            ssd1306_bmp_show_image_with_offset(p, icon_pause_data, icon_pause_size, 58, 10);
-        } else {
-            ssd1306_bmp_show_image_with_offset(p, icon_ready_data, icon_ready_size, 58, 10);
+        ssd1306_bmp_show_image_with_offset(p, icon_ready_data, icon_ready_size, state_x, state_y);
+        state_label = "RDY";
+    }
+
+    ssd1306_draw_string(p, 14, 0, 1, state_label);
+
+    uint32_t length_ms = looper_get_loop_length_ms();
+    uint32_t elapsed_ms = looper_get_elapsed_ms();
+    bool is_rec = looper_is_recording();
+
+    // For recording, show progress against max length
+    if (is_rec && length_ms == 0) {
+        length_ms = looper_get_max_length_ms();
+    }
+
+    if (looper_has_recording() || is_rec) {
+        if (!is_rec && length_ms > 0) {
+            elapsed_ms = elapsed_ms % length_ms;
+        }
+        uint8_t bar_x = 42;
+        uint8_t bar_y = 0;
+        uint8_t bar_w = 84;
+        uint8_t bar_h = 8;
+        ssd1306_draw_square(p, bar_x, bar_y, bar_w, bar_h);
+        if (length_ms > 0) {
+            uint32_t clamped = elapsed_ms;
+            if (clamped > length_ms) clamped = length_ms;
+            uint32_t width = clamped * (bar_w - 2) / length_ms;
+            ssd1306_draw_square(p, bar_x + 1, bar_y + 1, width, bar_h - 2);
         }
     }
 
-    // Transpose
-    ssd1306_bmp_show_image_with_offset(p, icon_transpose_data, icon_transpose_size, ICON_CENTERED_MARGIN_X, 0);
-    uint8_t t = looper_get_transpose();
+    // Row 2: time
+    char time_buf[22];
+    uint32_t length_tenths = (length_ms + 50) / 100; // ms to 0.1s rounding
+    uint32_t elapsed_tenths = (elapsed_ms + 50) / 100;
+    snprintf(time_buf, sizeof(time_buf), "%lu.%lu / %lu.%lu s",
+        (unsigned long)(elapsed_tenths / 10), (unsigned long)(elapsed_tenths % 10),
+        (unsigned long)(length_tenths / 10), (unsigned long)(length_tenths % 10));
+    ssd1306_draw_string(p, 0, 12, 1, time_buf);
 
-    // Draw transposition marker
-    ssd1306_draw_square(p, ICON_CENTERED_MARGIN_X + transpose_coords[t][0],
-                                            transpose_coords[t][1], 2, 2);
-
-    // Draw selection mark
+    // Row 3: hint or event count
     if(get_context() == CTX_LOOPER) {
-        ssd1306_draw_square(p, 0, 0, 2, 32);
+        ssd1306_draw_string(p, 0, 24, 1, "Btn Rec/Play | Hold Clear | Enc Restart");
+    } else {
+        char evt_buf[16];
+        snprintf(evt_buf, sizeof(evt_buf), "evts:%u", looper_get_event_count());
+        ssd1306_draw_string(p, 0, 24, 1, evt_buf);
     }
 }
 
@@ -217,13 +240,17 @@ static inline void draw_arp_pattern_screen(ssd1306_t *p) {
 static inline void draw_arp_speed_screen(ssd1306_t *p) {
     ssd1306_draw_string(p, 0, 0, 1, "Arp Speed:");
     
-    uint8_t speed = get_arp_speed();
+    uint16_t speed_ms = get_arp_speed_ms();
+    // Calculate BPM: 60000ms / interval = BPM
+    uint16_t bpm = (speed_ms > 0) ? (60000 / speed_ms) : 0;
     
-    // Draw speed name centered and large
-    const char *speed_name = arp_speed_names[speed];
-    uint8_t name_len = strlen(speed_name);
+    // Format as BPM value
+    char speed_str[16];
+    snprintf(speed_str, sizeof(speed_str), "%d BPM", bpm);
+    
+    uint8_t name_len = strlen(speed_str);
     uint8_t margin_x = (128 - (name_len * 12)) / 2;  // Center for scale 2 font
-    ssd1306_draw_string(p, margin_x, 14, 2, speed_name);
+    ssd1306_draw_string(p, margin_x, 14, 2, speed_str);
     
     // Draw selection mark if in edit mode
     if(get_context() == CTX_ARP_SPEED) {
@@ -532,6 +559,10 @@ void display_refresh(ssd1306_t *p) {
     ssd1306_reset(p);
     ssd1306_show(p);
     i2c1_mutex_exit();
+}
+
+void display_request_refresh(void) {
+    display_pending = true;
 }
 
 void display_update_contrast(ssd1306_t *p) {

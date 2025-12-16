@@ -1,161 +1,280 @@
 #include "pico/stdlib.h"
 #include <stdlib.h>
+#include "config.h"
+#include "state.h"
 #include "looper.h"
+#include "display/display.h"
 
-// Declare the static looper instance
+// Display refresh interval in milliseconds
+#define LOOPER_DISPLAY_REFRESH_MS 100
+
+// Single global looper instance
 static looper_t looper;
 
-// Handle button presses
-void looper_onpress() {
-    switch(looper.state) {
-        case LOOP_READY:
-            // If there is a recording, start playing it.
-            // If there is no recording, do nothing
-            looper_start_playback();
-        break;
-        case LOOP_REC:
-            // Stop recording, start playing
-            looper.loop_duration = time_us_32() - looper.rec_start_timestamp;
-            looper_start_playback();
-        break;
-        case LOOP_PLAY:
-            // Stop playing
-            all_notes_off();
-            looper_set_state(LOOP_READY);
-        break;
-        case LOOP_OFF:
-            // Do nothing
-        break;
+static void looper_clear_internal(void) {
+    looper.event_count = 0;
+    looper.play_index = 0;
+    looper.loop_length_ms = 0;
+    looper.has_loop = false;
+}
+
+static void looper_restart_playback(void) {
+    looper.play_index = 0;
+    looper.play_start_us = time_us_64();
+    looper.state = LOOP_PLAYING;
+}
+
+void looper_init(uint16_t max_events, uint32_t max_length_ms) {
+    looper.state = LOOP_DISABLED;
+    looper.events = (looper_event_t *)calloc(max_events, sizeof(looper_event_t));
+    
+    if (!looper.events) {
+        looper.max_events = 0;
+        looper.max_length_ms = 0;
+        return;
     }
-}
-
-// Initialize the looper
-void looper_init(uint16_t events_max) {
-    looper.events = malloc(sizeof(note_event_t) * events_max);
-    looper.rec_index = 0;
-    looper.events_max = events_max;
-    looper.rec_start_timestamp = 0;
-    looper.play_start_timestamp = 0;
-    looper.loop_duration = 0;
-    looper.has_recording = false;
-}
-
-void looper_start_playback() {
-    if(looper_has_recording()) {
-        // Start playback
-        looper_set_state(LOOP_PLAY);
-    } else {
-        // No note events on record
-        looper_set_state(LOOP_READY);
-    }
-}
-
-// Record a note event
-void looper_record(uint8_t id, uint8_t velocity, bool is_on) {
-    if (looper_is_disabled() || looper_is_playing()) { return; }
-    else if (looper_is_ready()) {
-        looper.rec_index = 0;
-        looper.rec_start_timestamp = 0;
-        looper.loop_duration = 0;
-        looper_set_state(LOOP_REC);
-    }
-
-    if (looper.rec_index < looper.events_max) {
-        uint32_t now = time_us_32();
-        if(looper.rec_start_timestamp == 0) { looper.rec_start_timestamp = now; }
-        note_event_t* event = &looper.events[looper.rec_index];
-        event->timestamp = now - looper.rec_start_timestamp;
-        event->id = id;
-        event->velocity = velocity;
-        event->is_on = is_on;
-        looper.rec_index++;
-        // If the looper has at least two entries, turn the flag on
-        if(looper.rec_index > 1) {
-            looper.has_recording = true;
-        }
-    }
-
-}
-
-void looper_transpose_up(){
-    looper.transpose++;
-    if(looper.transpose >= 12 ) { looper.transpose = 0; }
-    all_notes_off();
-}
-
-void looper_transpose_down(){
-    looper.transpose--;
-    if(looper.transpose <= -12 ) { looper.transpose = 0; }
-    all_notes_off();
-}
-
-static inline uint8_t transpose_id(uint8_t id) {
-    int16_t wrap = id + looper.transpose;
-    wrap = (wrap % 12 + 12) % 12;
-    return (uint8_t)wrap;
-}
-
-void looper_task() {
-    if(!looper_is_playing()) { return; }
-    uint32_t now = time_us_32();
-    if(now - looper.play_start_timestamp > looper.loop_duration){ // Loop start or restart
-        looper.play_start_timestamp = now;
-        looper.play_index = 0;
-    }
-    // Scan for recorded events to replay
-    for (uint16_t i = looper.play_index; i < looper.rec_index; i++) {
-        note_event_t* event = &looper.events[i];
-        // Check if it's time to replay the event
-        if (now >= event->timestamp + looper.play_start_timestamp) {
-            uint8_t id = transpose_id(event->id);
-            if (event->is_on) {
-                note_on(id, event->velocity);
-            } else {
-                note_off(id);
-            }
-            // Increase the counter, to avoid processing events more than once
-            looper.play_index++;
-        }
-
-        }
-
+    
+    looper.max_events = max_events;
+    looper.max_length_ms = max_length_ms;
+    looper_clear_internal();
 }
 
 void looper_enable() {
-    looper_set_state(LOOP_READY);
+    if (looper.events && looper_is_disabled()) {
+        looper.state = LOOP_IDLE;
+    }
 }
 
 void looper_disable() {
+    looper.state = LOOP_DISABLED;
+    looper_clear_internal();
     all_notes_off();
-    looper_set_state(LOOP_OFF);
 }
 
-void looper_set_state(looper_state_t state) {
-    looper.state = state;
-}
-
-uint8_t looper_get_transpose() {
-    int16_t wrap = looper.transpose;
-    wrap = (wrap % 12 + 12) % 12;
-    return (uint8_t)wrap;
+void looper_clear() {
+    looper_clear_internal();
+    if (!looper_is_disabled()) {
+        looper.state = LOOP_IDLE;
+    }
 }
 
 bool looper_is_disabled() {
-    return (looper.state == LOOP_OFF);
-}
-
-bool looper_is_ready() {
-    return (looper.state == LOOP_READY);
+    return (looper.state == LOOP_DISABLED || looper.events == NULL);
 }
 
 bool looper_is_recording() {
-    return (looper.state == LOOP_REC);
+    return (looper.state == LOOP_RECORDING);
 }
 
 bool looper_is_playing() {
-    return (looper.state == LOOP_PLAY);
+    return (looper.state == LOOP_PLAYING);
 }
 
-bool looper_has_recording() {
-    return (looper.has_recording);
+bool looper_has_loop() {
+    return looper.has_loop && looper.loop_length_ms > 0 && looper.event_count > 0;
+}
+
+bool looper_has_events() {
+    return looper.event_count > 0;
+}
+
+// Display throttle using 32-bit timestamps (faster, 71min wrap is fine for throttle)
+static uint32_t last_display_refresh_ms_rec = 0;
+static uint32_t last_display_refresh_ms_play = 0;
+
+void looper_start_record() {
+    if (looper_is_disabled()) { return; }
+    looper_clear_internal();
+    looper.rec_start_us = time_us_64();
+    last_display_refresh_ms_rec = 0;  // Reset display throttle
+    last_display_refresh_ms_play = 0;
+    looper.state = LOOP_RECORDING;
+}
+
+void looper_stop_record_and_play() {
+    if (looper_is_disabled()) { return; }
+    if (looper.state != LOOP_RECORDING) { return; }
+
+    uint64_t now_us = time_us_64();
+    uint32_t elapsed_ms = (uint32_t)((now_us - looper.rec_start_us) / 1000);
+    if (elapsed_ms == 0) {
+        looper_clear();
+        return;
+    }
+    if (elapsed_ms > looper.max_length_ms) {
+        elapsed_ms = looper.max_length_ms;
+    }
+    looper.loop_length_ms = elapsed_ms;
+    looper.has_loop = (looper.event_count > 0);
+
+    if (looper.has_loop) {
+        looper_restart_playback();
+    } else {
+        looper.state = LOOP_IDLE;
+    }
+}
+
+void looper_stop() {
+    if (looper_is_disabled()) { return; }
+    looper.state = looper_has_loop() ? LOOP_PAUSED : LOOP_IDLE;
+}
+
+void looper_restart_from_start() {
+    if (looper_is_disabled()) { return; }
+    if (!looper_has_loop()) { return; }
+    all_notes_off();
+    looper.play_index = 0;
+    looper.play_start_us = time_us_64();
+    looper.state = LOOP_PLAYING;
+}
+
+void looper_onpress() {
+    switch (looper.state) {
+        case LOOP_DISABLED:
+            return;
+        case LOOP_IDLE:
+        case LOOP_PAUSED:
+            looper_start_record();
+            break;
+        case LOOP_RECORDING:
+            looper_stop_record_and_play();
+            break;
+        case LOOP_PLAYING:
+            looper_stop();
+            break;
+    }
+}
+
+static void looper_append_event(looper_event_type_t type, uint8_t d1, uint8_t d2, int16_t pitch) {
+    // Combined check: must be recording with valid events buffer
+    if (looper.state != LOOP_RECORDING || looper.events == NULL) return;
+    if (looper.event_count >= looper.max_events) return; // Drop extra events silently
+
+    uint64_t now_us = time_us_64();
+    uint32_t ts_ms = (uint32_t)((now_us - looper.rec_start_us) / 1000);
+    if (ts_ms > looper.max_length_ms) {
+        looper_stop_record_and_play();
+        return;
+    }
+
+    looper_event_t *evt = &looper.events[looper.event_count++];
+    evt->timestamp_ms = ts_ms;
+    evt->type = type;
+    evt->data1 = d1;
+    evt->data2 = d2;
+    evt->pitch = pitch;
+}
+
+void looper_record_note(uint8_t note, uint8_t velocity, bool is_on) {
+    // Early exit when disabled - avoid any work in hot path
+    if (looper_is_disabled()) return;
+    
+    if (looper.state == LOOP_IDLE || looper.state == LOOP_PAUSED) {
+        looper_start_record();
+    }
+    looper_append_event(is_on ? LOOPER_EVENT_NOTE_ON : LOOPER_EVENT_NOTE_OFF, note, velocity, 0);
+}
+
+void looper_record_cc(uint8_t cc_number, uint8_t value) {
+    if (looper_is_disabled()) return;
+    looper_append_event(LOOPER_EVENT_CC, cc_number, value, 0);
+}
+
+void looper_record_pitch(int16_t pitch_bend) {
+    if (looper_is_disabled()) return;
+    looper_append_event(LOOPER_EVENT_PITCH, 0, 0, pitch_bend);
+}
+
+static void looper_dispatch_event(const looper_event_t *evt) {
+    switch (evt->type) {
+        case LOOPER_EVENT_NOTE_ON:
+            looper_send_note_on(evt->data1, evt->data2);
+            break;
+        case LOOPER_EVENT_NOTE_OFF:
+            looper_send_note_off(evt->data1);
+            break;
+        case LOOPER_EVENT_CC:
+            looper_send_cc(evt->data1, evt->data2);
+            break;
+        case LOOPER_EVENT_PITCH:
+            looper_send_pitch(evt->pitch);
+            break;
+        default:
+            break;
+    }
+}
+
+void looper_task() {
+    // Early exit when disabled - avoid all work including time_us_64 call
+    if (looper_is_disabled()) return;
+
+    // Refresh display periodically during recording to advance the clock
+    if (looper.state == LOOP_RECORDING) {
+        uint32_t now_ms = time_us_32() / 1000;
+        if ((now_ms - last_display_refresh_ms_rec) >= LOOPER_DISPLAY_REFRESH_MS) {
+            display_request_refresh();
+            last_display_refresh_ms_rec = now_ms;
+        }
+        return;
+    }
+
+    if (!looper_is_playing() || !looper_has_loop()) {
+        return;
+    }
+
+    uint64_t now_us = time_us_64();
+    uint32_t elapsed_ms = (uint32_t)((now_us - looper.play_start_us) / 1000);
+
+    // Restart loop when reaching end
+    if (elapsed_ms >= looper.loop_length_ms) {
+        looper_restart_playback();
+        elapsed_ms = 0;
+    }
+
+    // Dispatch any due events
+    while (looper.play_index < looper.event_count) {
+        const looper_event_t *evt = &looper.events[looper.play_index];
+        if (evt->timestamp_ms <= elapsed_ms) {
+            looper_dispatch_event(evt);
+            looper.play_index++;
+        } else {
+            break;
+        }
+    }
+
+    uint32_t now_ms = time_us_32() / 1000;
+    if ((now_ms - last_display_refresh_ms_play) >= LOOPER_DISPLAY_REFRESH_MS) {
+        display_request_refresh();
+        last_display_refresh_ms_play = now_ms;
+    }
+}
+
+uint32_t looper_get_loop_length_ms() {
+    return looper.loop_length_ms;
+}
+
+uint16_t looper_get_event_count() {
+    return looper.event_count;
+}
+
+uint16_t looper_get_play_index() {
+    return looper.play_index;
+}
+
+looper_state_t looper_get_state() {
+    return looper.state;
+}
+
+uint32_t looper_get_elapsed_ms() {
+    if (looper.state == LOOP_PLAYING && looper.loop_length_ms > 0) {
+        return (uint32_t)((time_us_64() - looper.play_start_us) / 1000);
+    }
+    if (looper.state == LOOP_RECORDING) {
+        return (uint32_t)((time_us_64() - looper.rec_start_us) / 1000);
+    }
+    return 0;
+}
+
+uint32_t looper_get_max_length_ms() {
+    return looper.max_length_ms;
 }

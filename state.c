@@ -554,27 +554,33 @@ void set_arp_pattern_down() {
     }
 }
 
-uint8_t get_arp_speed() {
-    return state.arp_speed;
+uint16_t get_arp_speed_ms() {
+    return state.arp_speed_ms;
 }
 
-void set_arp_speed(uint8_t speed) {
-    if (speed < NUM_ARP_SPEEDS) {
-        state.arp_speed = speed;
+void set_arp_speed_ms(uint16_t speed_ms) {
+    if (speed_ms >= ARP_SPEED_MIN && speed_ms <= ARP_SPEED_MAX) {
+        state.arp_speed_ms = speed_ms;
     }
 }
 
 void set_arp_speed_up() {
-    uint8_t speed = get_arp_speed();
-    if (speed < NUM_ARP_SPEEDS - 1) {
-        set_arp_speed(speed + 1);
+    // Faster = smaller interval
+    uint16_t speed = get_arp_speed_ms();
+    if (speed > ARP_SPEED_MIN) {
+        uint16_t new_speed = speed - ARP_SPEED_STEP;
+        if (new_speed < ARP_SPEED_MIN) new_speed = ARP_SPEED_MIN;
+        set_arp_speed_ms(new_speed);
     }
 }
 
 void set_arp_speed_down() {
-    uint8_t speed = get_arp_speed();
-    if (speed > 0) {
-        set_arp_speed(speed - 1);
+    // Slower = larger interval
+    uint16_t speed = get_arp_speed_ms();
+    if (speed < ARP_SPEED_MAX) {
+        uint16_t new_speed = speed + ARP_SPEED_STEP;
+        if (new_speed > ARP_SPEED_MAX) new_speed = ARP_SPEED_MAX;
+        set_arp_speed_ms(new_speed);
     }
 }
 

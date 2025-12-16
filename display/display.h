@@ -19,6 +19,7 @@ void display_update_contrast(ssd1306_t *p);
 void display_dim(ssd1306_t *p);
 void display_wake(ssd1306_t *p);
 void display_refresh(ssd1306_t *p);
+void display_request_refresh(void); // Mark display for refresh when convenient
 void intro_animation(ssd1306_t *p, void (*callback)(void));
 bool display_is_pending(void);  // Returns true if a display update was deferred
 

@@ -32,9 +32,9 @@ typedef enum selection {
     SELECTION_KEY,
     SELECTION_SCALE,
     SELECTION_INSTRUMENT,
+    SELECTION_VOLUME,
     SELECTION_CHORD,
     SELECTION_ARPEGGIO,
-    SELECTION_VOLUME,
     SELECTION_LOOPER,
     SELECTION_IMU_CONFIG,
     SELECTION_LAST,
@@ -79,7 +79,7 @@ typedef struct state {
 
     // Arpeggiator (not saved to flash)
     uint8_t arp_pattern;                // Off, Up, Down, Up-Down, Random
-    uint8_t arp_speed;                  // Slow, Medium, Fast, V.Fast
+    uint16_t arp_speed_ms;              // Interval in milliseconds (50-1000ms)
     uint8_t arp_octave;                 // 1, 2, or 3 octave range
 
     // Visual note indicator
@@ -197,8 +197,8 @@ uint8_t get_arp_pattern();
 void set_arp_pattern(uint8_t pattern);
 void set_arp_pattern_up();
 void set_arp_pattern_down();
-uint8_t get_arp_speed();
-void set_arp_speed(uint8_t speed);
+uint16_t get_arp_speed_ms();
+void set_arp_speed_ms(uint16_t speed_ms);
 void set_arp_speed_up();
 void set_arp_speed_down();
 uint8_t get_arp_octave();

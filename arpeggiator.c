@@ -30,15 +30,13 @@ typedef struct {
 
 static arpeggiator_t arp;
 
-// Get interval in milliseconds based on speed setting
+// Get interval in milliseconds from state
 static uint32_t get_interval_ms() {
-    switch (get_arp_speed()) {
-        case ARP_SPEED_SLOW:    return ARP_INTERVAL_SLOW;
-        case ARP_SPEED_MEDIUM:  return ARP_INTERVAL_MEDIUM;
-        case ARP_SPEED_FAST:    return ARP_INTERVAL_FAST;
-        case ARP_SPEED_VFAST:   return ARP_INTERVAL_VFAST;
-        default:                return ARP_INTERVAL_MEDIUM;
-    }
+    uint16_t speed = get_arp_speed_ms();
+    // Ensure valid range
+    if (speed < ARP_SPEED_MIN) return ARP_SPEED_MIN;
+    if (speed > ARP_SPEED_MAX) return ARP_SPEED_MAX;
+    return speed;
 }
 
 // Get the sorted list of held pads (low to high by note)
@@ -196,17 +194,17 @@ static void play_next_step() {
     arp.current_pad = pad_id;
     arp.note_playing = true;
     arp.note_on_time = time_us_32() / 1000;  // Convert to ms
-    
-    // Record to looper
-    looper_record(pad_id, arp.velocity, true);
+
+    // Record to looper using the actual note value
+    looper_record_note(note, arp.velocity, true);
 }
 
 // Stop the current note (for gate timing)
 static void stop_current_note() {
     if (arp.note_playing) {
         stop_single_note(arp.current_note);
-        // Record note off to looper with the correct pad ID
-        looper_record(arp.current_pad, 0, false);
+        // Record note off with the actual note value
+        looper_record_note(arp.current_note, 0, false);
         arp.note_playing = false;
     }
 }
@@ -223,6 +221,11 @@ void arpeggiator_init() {
     arp.last_step_time = 0;
     arp.note_on_time = 0;
     arp.velocity = 100;
+    
+    // Initialize default arp speed if not set
+    if (get_arp_speed_ms() == 0) {
+        set_arp_speed_ms(ARP_SPEED_DEFAULT);
+    }
 }
 
 void arpeggiator_pad_on(uint8_t pad_id, uint8_t velocity) {

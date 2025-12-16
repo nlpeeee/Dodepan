@@ -362,6 +362,34 @@ void stop_single_note(uint8_t note) {
 #endif
 }
 
+// Looper playback hooks (called from looper.c)
+void looper_send_note_on(uint8_t note, uint8_t velocity) {
+    play_single_note(note, velocity);
+}
+
+void looper_send_note_off(uint8_t note) {
+    stop_single_note(note);
+}
+
+void looper_send_cc(uint8_t cc_number, uint8_t value) {
+    g_synth.control_change(cc_number, value);
+#if defined(USE_MIDI)
+    tudi_midi_write24(0, 0xB0, cc_number, value);
+#endif
+}
+
+void looper_send_pitch(int16_t pitch_bend) {
+    int16_t bend = pitch_bend + 8192; // Convert signed back to 14-bit MIDI range
+    if (bend < 0) bend = 0;
+    if (bend > 16383) bend = 16383;
+    uint8_t lsb = bend & 0x7F;
+    uint8_t msb = (bend >> 7) & 0x7F;
+    g_synth.pitch_bend(lsb, msb);
+#if defined(USE_MIDI)
+    tudi_midi_write24(0, 0xE0, lsb, msb);
+#endif
+}
+
 } // extern "C"
 
 void note_on(uint8_t id, uint8_t velocity) {
@@ -371,12 +399,9 @@ void note_on(uint8_t id, uint8_t velocity) {
     // Reset active notes for this pad
     active_chord_count[id] = 0;
     
-    // For chord modes, we need to send notes with slight delays to ensure
-    // the synth's voice allocator processes each note separately
-    bool needs_delay = (chord_mode != CHORD_OFF);
-    
     // Always play root note
     play_single_note(note, velocity);
+    looper_record_note(note, velocity, true);
     active_chord_notes[id][active_chord_count[id]++] = note;
     
     switch(chord_mode) {
@@ -390,6 +415,7 @@ void note_on(uint8_t id, uint8_t velocity) {
             if (fifth <= 127) {
                 sleep_us(100);  // Brief delay for voice allocation
                 play_single_note(fifth, velocity);
+                looper_record_note(fifth, velocity, true);
                 active_chord_notes[id][active_chord_count[id]++] = fifth;
             }
             break;
@@ -402,11 +428,13 @@ void note_on(uint8_t id, uint8_t velocity) {
             if (third <= 127) {
                 sleep_us(100);  // Brief delay for voice allocation
                 play_single_note(third, velocity);
+                looper_record_note(third, velocity, true);
                 active_chord_notes[id][active_chord_count[id]++] = third;
             }
             if (fifth <= 127) {
                 sleep_us(100);  // Brief delay for voice allocation
                 play_single_note(fifth, velocity);
+                looper_record_note(fifth, velocity, true);
                 active_chord_notes[id][active_chord_count[id]++] = fifth;
             }
             break;
@@ -418,6 +446,7 @@ void note_on(uint8_t id, uint8_t velocity) {
             if (octave <= 127) {  // MIDI note range check
                 sleep_us(100);  // Brief delay for voice allocation
                 play_single_note(octave, velocity);
+                looper_record_note(octave, velocity, true);
                 active_chord_notes[id][active_chord_count[id]++] = octave;
             }
             break;
@@ -428,7 +457,9 @@ void note_on(uint8_t id, uint8_t velocity) {
 void note_off(uint8_t id) {
     // Stop all notes that were started for this pad
     for (uint8_t i = 0; i < active_chord_count[id]; i++) {
-        stop_single_note(active_chord_notes[id][i]);
+        uint8_t note = active_chord_notes[id][i];
+        stop_single_note(note);
+        looper_record_note(note, 0, false);
     }
     active_chord_count[id] = 0;
 }
@@ -447,7 +478,6 @@ void touch_on(uint8_t id) {
         arpeggiator_pad_on(id, velocity);
     } else {
         note_on(id, velocity);
-        looper_record(id, velocity, true);
     }
 
     // Since a note_on event can start the looper recording,
@@ -466,7 +496,6 @@ void touch_off(uint8_t id) {
         arpeggiator_pad_off(id);
     } else {
         note_off(id);
-        looper_record(id, 0, false);
     }
     
 #if defined (USE_DISPLAY)
@@ -474,7 +503,7 @@ void touch_off(uint8_t id) {
 #endif
 }
 
-void all_notes_off() {
+extern "C" void all_notes_off() {
     g_synth.all_notes_off();
     // Stop arpeggiator if running
     arpeggiator_stop();
@@ -487,8 +516,13 @@ void all_notes_off() {
 
 // Use the IMU to alter parameters according to device tilting
 void tilt_process() {
+    static uint8_t cc_throttle;
     if(get_imu_axes() & 0x02) {
         g_synth.control_change(FILTER_CUTOFF, imu_data.deviation_y);
+        // Thin out recorded CC events to avoid exhausting the looper buffer
+        if ((cc_throttle++ & 0x03) == 0) {
+            looper_record_cc(FILTER_CUTOFF, imu_data.deviation_y);
+        }
     }
 
     // Split the bytes
@@ -498,6 +532,11 @@ void tilt_process() {
     // Send the instruction to the synth
     if(get_imu_axes() & 0x01) {
         g_synth.pitch_bend(bending_lsb, bending_msb);
+        static uint8_t pitch_throttle;
+        int16_t bend_signed = (int16_t)imu_data.deviation_x - 8192;
+        if ((pitch_throttle++ & 0x03) == 0) {
+            looper_record_pitch(bend_signed);
+        }
 
 #if defined (USE_MIDI)
         static uint8_t throttle;
@@ -611,7 +650,11 @@ void encoder_up() {
             set_preset_slot_up();
         break;
         case CTX_LOOPER:
-            looper_transpose_up();
+            // Restart loop from beginning
+            if (looper_has_loop()) {
+                looper_restart_from_start();
+            }
+            set_context(CTX_LOOPER); // Keep context steady to avoid stray handlers
         break;
         case CTX_SCALE_EDIT_STEP:
             set_step_up();
@@ -708,7 +751,11 @@ void encoder_down() {
             set_preset_slot_down();
         break;
         case CTX_LOOPER:
-            looper_transpose_down();
+            // Restart loop from beginning
+            if (looper_has_loop()) {
+                looper_restart_from_start();
+            }
+            set_context(CTX_LOOPER); // Keep context steady to avoid stray handlers
         break;
         case CTX_SCALE_EDIT_STEP:
             set_step_down();
@@ -807,6 +854,7 @@ void button_long_press() {
             set_context(CTX_SELECTION);
         break;
         case CTX_LOOPER:
+            // Stop and disable looper before exiting
             looper_disable();
             set_context(CTX_SELECTION);
         break;
@@ -1092,8 +1140,8 @@ int main() {
     // Initialize the touch module
     mpr121_i2c_init();
 
-    // Initialize the looper with a maximum of 512 note events
-    looper_init(512);
+    // Initialize the audio looper with fixed-length buffer
+    looper_init(LOOPER_MAX_EVENTS, LOOPER_MAX_SECONDS * 1000);
 
     // Initialize the arpeggiator
     arpeggiator_init();
