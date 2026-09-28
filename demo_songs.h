@@ -6683,7 +6683,7 @@ static const demo_song_t demo_songs[DEMO_SONG_COUNT] = {
     { "What It Sounds Like", What_It_Sounds_Like_data, sizeof(What_It_Sounds_Like_data) },
     { "Wish It Could Be Christmas Everyday", Wish_It_Could_Be_Christmas_Everyday_data, sizeof(Wish_It_Could_Be_Christmas_Everyday_data) },
     /* Classic demos begin */
-    {"Bach Prelude C",classic_wtk1-prelude1_data,sizeof(classic_wtk1-prelude1_data)},
+    {"Bach Prelude C",classic_wtk1_prelude1_data,sizeof(classic_wtk1_prelude1_data)},
     {"Fur Elise",classic_fur_Elise_WoO59_data,sizeof(classic_fur_Elise_WoO59_data)},
     {"Greensleeves",classic_GreensleevesAcc_data,sizeof(classic_GreensleevesAcc_data)},
     {"Canon in D",classic_CanonInD_data,sizeof(classic_CanonInD_data)},

@@ -4,6 +4,8 @@ import sys,re,json,hashlib
 from collections import defaultdict
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'tools'))
 from midi_to_c import parse_midi_file,MidiEvent,create_merged_midi,bytes_to_c_array
+def _c_ident(s):
+ s=re.sub(r'[^A-Za-z0-9_]','_',s);return s if (s[:1].isalpha() or s[:1]=='_') else '_'+s
 OUT=ROOT/'build-audit/demo-classics';OUT.mkdir(parents=True,exist_ok=True)
 specs=[('Bach Prelude C','wtk1-prelude1',72,[1,2],.45),('Fur Elise','fur_Elise_WoO59',72,[1,2],.65),('Greensleeves','GreensleevesAcc',132,[1,2],1.6),('Canon in D','CanonInD',88,[1],1.8)]
 header=['// Derived from Mutopia sources; see tools/demo-classics/SOURCES.md.','#pragma once','#include <stdint.h>'];rows=[];reports=[]
@@ -57,7 +59,7 @@ for name,stem,bpm,chosen,cap in specs:
  midi_events=[MidiEvent(0,b'\xff\x51\x03'+tempo.to_bytes(3,'big'))]
  midi_events += [MidiEvent(t,bytes([144 if on else 128,n,v])) for t,on,n,v in events]
  midi_events.append(MidiEvent(end,b'\xff\x2f\x00'));data=create_merged_midi(midi_events,ppq)
- ident='classic_'+stem;(OUT/(name+'.mid')).write_bytes(data);header.append(bytes_to_c_array(ident,data));rows.append('    {"'+name+'",'+ident+'_data,sizeof('+ident+'_data)},')
+ ident='classic_'+_c_ident(stem);(OUT/(name+'.mid')).write_bytes(data);header.append(bytes_to_c_array(ident,data));rows.append('    {"'+name+'",'+ident+'_data,sizeof('+ident+'_data)},')
  reports.append(dict(name=name,source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),notes=len(arranged),max_held=peak,seconds=round(end*tempo/ppq/1e6,2)))
 (ROOT/'demo_classics.h').write_text('\n'.join(header)+'\n')
 p=ROOT/'demo_songs.h';s=p.read_text();s=re.sub(r'    /\* (?:Original|Classic) demos begin \*/.*?    /\* (?:Original|Classic) demos end \*/\n','',s,flags=re.S);s=s.replace('#include "demo_originals.h"\n','').replace('#include "demo_classics.h"\n','');s=s.replace('static const demo_song_t demo_songs','#include "demo_classics.h"\nstatic const demo_song_t demo_songs');a=s.index('static const demo_song_t demo_songs');end=s.index('\n};',a);s=s[:end]+'\n    /* Classic demos begin */\n'+'\n'.join(rows)+'\n    /* Classic demos end */'+s[end:];s=re.sub(r'#define DEMO_(MAX_SONGS|SONG_COUNT) \d+',lambda m:'#define DEMO_'+m[1]+' 13',s);p.write_text(s)
