@@ -3,12 +3,14 @@
  * By Turi Scandurra – https://turiscandurra.com/circuits
  */
 
+#include "volume_control.h"
 #include "config.h"         // Most configurable options are here
 #include "pico/stdlib.h"
 // Arduino types added for compatibility
 typedef bool boolean;
 typedef uint8_t byte;
 #include "hardware/clocks.h"
+#include "hardware/timer.h"  // For CPU profiling
 #include "hardware/gpio.h"
 #include "hardware/adc.h"   // Used for low battery detection
 #include "hardware/flash.h"
@@ -16,7 +18,15 @@ typedef uint8_t byte;
 #include "pico/multicore.h"
 #include "sound_i2s.h"
 #include "pra32-u2-common.h" // https://github.com/risgk/digital-synth-pra32-u2
-#include "pra32-u2-synth.h"  // PRA32-U2 version 1.5.0 (optimized for RP2350)
+#include "synth_service.h"
+#include "pop_capture.h"
+#include "settings_store.h"
+#include "note_router.h"
+#include "pico/flash.h"
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include "hardware/uart.h"
 #include "instrument_preset.h"
 #include "encoder.h"        // https://github.com/TuriSc/RP2040-Rotary-Encoder
 #include "button.h"         // https://github.com/TuriSc/RP2040-Button
@@ -28,20 +38,25 @@ typedef uint8_t byte;
 #include "touch.h"
 #include "looper.h"
 #include "arpeggiator.h"
+#include "demo_player.h"
 #include "display/display.h"
 #include "state.h"
 #include "i2c_mutex.h"
 
 /* Globals */
 
-PRA32_U2_Synth g_synth;
+// The engine is owned exclusively by synth_service.cpp on core 1.
 
 state_t* state;
 
 Imu_data imu_data;
 
-uint8_t **user_presets;
-uint8_t **user_scales;
+static uint8_t preset_storage[NUM_PRESET_SLOTS][PROGRAM_PARAMS_NUM];
+static uint8_t scale_storage[NUM_SCALE_SLOTS][12];
+static uint8_t *preset_rows[]={preset_storage[0],preset_storage[1],preset_storage[2],preset_storage[3]};
+static uint8_t *scale_rows[]={scale_storage[0],scale_storage[1],scale_storage[2],scale_storage[3]};
+uint8_t **user_presets=preset_rows;
+uint8_t **user_scales=scale_rows;
 
 #if defined (USE_DISPLAY)
 ssd1306_t display;
@@ -49,12 +64,44 @@ ssd1306_t display;
 
 static alarm_id_t power_on_alarm_id;
 static alarm_id_t long_press_alarm_id;
-static alarm_id_t flash_write_alarm_id;
+static bool save_pending=false;
+static uint64_t save_due_us;
+static int saved_sector=-1;
+static uint32_t saved_generation;
+static settings_data_t saved_settings;
+static bool have_saved_settings;
+void request_flash_write();
+void release_live_notes();
+extern "C" void all_notes_off();
+extern "C" bool settings_save_pending(){return save_pending;}
 
 // Volatile flags for deferred interrupt processing
-static volatile int8_t encoder_direction = 0;  // 0 = no change, 1 = up, -1 = down
+static volatile int32_t encoder_direction = 0;  // 0 = no change, 1 = up, -1 = down
 static volatile bool button_pressed = false;
 static volatile bool button_long_press_pending = false;
+
+static uint32_t midi_overflows;
+static void diagnostics_task(){
+#if DODEPAN_UART_DIAGNOSTICS
+    static bool initialized;
+    static char line[512];static size_t length,position;
+    static uint64_t last,previous;static uint32_t max_loop_us;
+    uint64_t now=time_us_64();
+    if(previous && now-previous>max_loop_us)max_loop_us=(uint32_t)(now-previous);previous=now;
+    if(!initialized){uart_init(uart1,115200);gpio_set_function(8,GPIO_FUNC_UART);gpio_set_function(9,GPIO_FUNC_UART);initialized=true;}
+    for(unsigned i=0;i<16 && position<length && uart_is_writable(uart1);i++)uart_get_hw(uart1)->dr=line[position++];
+    synth_diagnostics_t s;synth_get_diagnostics(&s);
+    if(position<length || !s.ready || now-last<1000000)return;
+    last=now;audio_diagnostics_t a;audio_get_diagnostics(&a);
+    int n=snprintf(line,sizeof(line),"Dodepan %s src=%s engine=%s flags=%u%u%u t=%llu clk=%lu frames=%u rate_mHz=%lu render_max=%lu avg_pct=%lu peak_pct=%lu irq_gap=%lu underrun=%lu late=%lu irq_miss=%lu dma=%llu observed_frames=%llu q_high=%lu q_loss=%lu midi_loss=%lu loop_gap=%lu imu=%u save=%u suspended=%u\n",
+        PROGRAM_VERSION,DODEPAN_SOURCE_ID,DODEPAN_ENGINE_ID,DODEPAN_DISABLE_DISPLAY,DODEPAN_DISABLE_IMU,DODEPAN_DISABLE_PERSISTENCE,(unsigned long long)(now/1000000),(unsigned long)a.system_clock_hz,AUDIO_TRANSPORT_FRAMES,
+        (unsigned long)a.frame_rate_millihz,(unsigned long)s.max_render_us,(unsigned long)get_cpu_avg_percent(),(unsigned long)get_cpu_max_percent(),(unsigned long)a.max_irq_gap_us,
+        (unsigned long)a.underruns,(unsigned long)a.late_publications,(unsigned long)a.irq_deadline_misses,(unsigned long long)a.dma_notifications,(unsigned long long)a.observed_frames,
+        (unsigned long)s.queue_high_water,(unsigned long)s.queue_overflows,(unsigned long)midi_overflows,
+        (unsigned long)max_loop_us,imu_data.available,save_pending,s.suspended);
+    length=n>0?(size_t)n:0;if(length>=sizeof(line))length=sizeof(line)-1;position=0;
+#endif
+}
 
 void core1_main();
 
@@ -79,10 +126,8 @@ static inline void update_degree() {
 }
 
 void load_user_preset(uint8_t instrument) {
-    uint8_t preset_num = instrument - 12; // Subtracting the 12 default presets (Dodepan + 3 child + 8 PRA32-U)
-    for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-        g_synth.control_change(dodepan_program_parameters[i], user_presets[preset_num][i]);
-    }
+    if(!instrument_is_user(instrument))return;
+    g_synth.apply_preset(user_presets[instrument-USER_INSTRUMENT_BASE]);
 }
 
 static inline void sync_control_change() {
@@ -93,42 +138,31 @@ static inline void sync_control_change() {
 }
 
 void update_instrument() {
+    all_notes_off();
     uint8_t instrument = get_instrument();
     switch (instrument) {
         case 0: // Load custom Dodepan preset
-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-                g_synth.control_change(dodepan_program_parameters[i], dodepan_preset[i]);
-            }
+            g_synth.apply_custom_preset(0);
             set_preset_slot(-1); // No slot selected
         break;
         case 1: // Magic Bell - child-friendly preset
-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-                g_synth.control_change(dodepan_program_parameters[i], magic_bell_preset[i]);
-            }
+            g_synth.apply_custom_preset(1);
             set_preset_slot(-1);
         break;
         case 2: // Space Piano - child-friendly preset
-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-                g_synth.control_change(dodepan_program_parameters[i], space_piano_preset[i]);
-            }
+            g_synth.apply_custom_preset(2);
             set_preset_slot(-1);
         break;
         case 3: // Robot Voice - child-friendly preset
-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-                g_synth.control_change(dodepan_program_parameters[i], robot_voice_preset[i]);
-            }
+            g_synth.apply_custom_preset(3);
             set_preset_slot(-1);
         break;
         case 4: // Synthwave - lush 80s style pad
-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-                g_synth.control_change(dodepan_program_parameters[i], synthwave_preset[i]);
-            }
+            g_synth.apply_custom_preset(4);
             set_preset_slot(-1);
         break;
         case 5: // Bleep Bloop - Adventure Time style beeps
-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-                g_synth.control_change(dodepan_program_parameters[i], bleep_bloop_preset[i]);
-            }
+            g_synth.apply_custom_preset(5);
             set_preset_slot(-1);
         break;
         case 14:
@@ -140,7 +174,7 @@ void update_instrument() {
             set_preset_slot(instrument - 14);
         break;
         default: // case 6-13: load PRA32-U presets (shifted by 6)
-            g_synth.program_change(instrument - 6);
+            g_synth.program_change(instrument_factory_program(instrument));
             set_preset_slot(-1); // No slot selected
         break;
     }
@@ -152,145 +186,79 @@ void update_instrument() {
     }
 }
 
-bool load_flash_data() { // Only called at startup
-    // Read address is different than write address
-    const uint8_t *stored_data = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
-
-    // Validation
-    uint8_t magic[MAGIC_NUMBER_LENGTH] = MAGIC_NUMBER;
-    bool invalid_data = false;
-    for(uint8_t i=0; i<MAGIC_NUMBER_LENGTH; i++){
-        if(stored_data[i] != magic[i]){ return false; } // Invalid data
-    }
-    
-    if((stored_data[MAGIC_NUMBER_LENGTH + 0] > HIGHEST_KEY)          || // Validate key
-       (stored_data[MAGIC_NUMBER_LENGTH + 1] > NUM_SCALES -1)        || // Validate scale
-       (stored_data[MAGIC_NUMBER_LENGTH + 2] > 13 + NUM_PRESET_SLOTS) || // Validate instrument
-       (stored_data[MAGIC_NUMBER_LENGTH + 3] > 0x03)                 || // Validate IMU configuration
-       (stored_data[MAGIC_NUMBER_LENGTH + 4] > 8)                    || // Validate volume
-       (stored_data[MAGIC_NUMBER_LENGTH + 5] > CONTRAST_AUTO)        || // Validate contrast
-       (stored_data[MAGIC_NUMBER_LENGTH + 6] >= NUM_CHORD_MODES)        // Validate chord mode
-    ) { return false; } // Invalid data
-
-    // Data is valid and can be loaded safely
-    set_key(             stored_data[MAGIC_NUMBER_LENGTH + 0]);
-    uint8_t scale =      stored_data[MAGIC_NUMBER_LENGTH + 1] ;
-    set_instrument(      stored_data[MAGIC_NUMBER_LENGTH + 2]);
-    set_imu_axes(        stored_data[MAGIC_NUMBER_LENGTH + 3]);
-    set_volume(          stored_data[MAGIC_NUMBER_LENGTH + 4]);
-    set_contrast(        stored_data[MAGIC_NUMBER_LENGTH + 5]);
-    set_chord_mode(      stored_data[MAGIC_NUMBER_LENGTH + 6]);
-
-    // Load user presets
-    uint8_t offset = MAGIC_NUMBER_LENGTH + 12;
-    for (uint8_t i = 0; i < NUM_PRESET_SLOTS; i++) {
-        for (uint8_t j = 0; j < PROGRAM_PARAMS_NUM; j++) {
-            user_presets[i][j] = stored_data[offset++];
-        }
-    }
-    update_instrument();
-
-    // Load user scales
-    for (uint8_t i = 0; i < NUM_SCALE_SLOTS; i++) {
-        for (uint8_t j = 0; j < 12; j++) {
-            user_scales[i][j] = stored_data[offset++];
-        }
-    }
-    set_and_extend_scale(scale);
-
-#if defined (USE_DISPLAY)
+bool load_flash_data() {
+    settings_data_t data;
+    saved_sector=settings_select((const uint8_t*)(XIP_BASE+SETTINGS_SECTOR_A),(const uint8_t*)(XIP_BASE+SETTINGS_SECTOR_B),NUM_SCALES,&data,&saved_generation);
+    bool legacy=saved_sector<0;
+    if(legacy && !settings_decode_legacy((const uint8_t*)(XIP_BASE+SETTINGS_LEGACY_OFFSET),SETTINGS_LEGACY_BYTES,NUM_SCALES,&data))return false;
+    set_key(data.key);set_instrument(data.instrument);set_imu_axes(data.imu_axes);
+    set_volume(data.volume);set_contrast(data.contrast);set_chord_mode(data.chord);
+    for(unsigned i=0;i<4;i++){memcpy(user_presets[i],data.presets[i],PROGRAM_PARAMS_NUM);memcpy(user_scales[i],data.scales[i],12);}
+    set_and_extend_scale(data.scale);update_instrument();
+    bool migrate=legacy || ((const uint8_t*)(XIP_BASE+(saved_sector?SETTINGS_SECTOR_B:SETTINGS_SECTOR_A)))[4]!=SETTINGS_FORMAT_VERSION;
+    saved_settings=data;have_saved_settings=!migrate;
+    if(migrate)request_flash_write();
+#if defined(USE_DISPLAY)
     display_update_contrast(&display);
 #endif
-
     return true;
 }
 
-int64_t write_flash_data(alarm_id_t id, void *) {
-    // Initialize the buffer with a signature
-    uint8_t flash_buffer[FLASH_PAGE_SIZE] = MAGIC_NUMBER;
-    uint8_t index = MAGIC_NUMBER_LENGTH;
-
-    // Gather the rest of the data
-    flash_buffer[MAGIC_NUMBER_LENGTH + 0] = get_key();
-    flash_buffer[MAGIC_NUMBER_LENGTH + 1] = get_scale();
-    flash_buffer[MAGIC_NUMBER_LENGTH + 2] = get_instrument();
-    flash_buffer[MAGIC_NUMBER_LENGTH + 3] = get_imu_axes();
-    flash_buffer[MAGIC_NUMBER_LENGTH + 4] = get_volume();
-    flash_buffer[MAGIC_NUMBER_LENGTH + 5] = get_contrast();
-    flash_buffer[MAGIC_NUMBER_LENGTH + 6] = get_chord_mode();
-
-    // Stop here if the stored data is the same as what we're about to write
-    const uint8_t *stored_data = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
-    if( stored_data[MAGIC_NUMBER_LENGTH + 0] == flash_buffer[MAGIC_NUMBER_LENGTH + 0] &&
-        stored_data[MAGIC_NUMBER_LENGTH + 1] == flash_buffer[MAGIC_NUMBER_LENGTH + 1] &&
-        stored_data[MAGIC_NUMBER_LENGTH + 2] == flash_buffer[MAGIC_NUMBER_LENGTH + 2] &&
-        stored_data[MAGIC_NUMBER_LENGTH + 3] == flash_buffer[MAGIC_NUMBER_LENGTH + 3] &&
-        stored_data[MAGIC_NUMBER_LENGTH + 4] == flash_buffer[MAGIC_NUMBER_LENGTH + 4] &&
-        stored_data[MAGIC_NUMBER_LENGTH + 5] == flash_buffer[MAGIC_NUMBER_LENGTH + 5] &&
-        stored_data[MAGIC_NUMBER_LENGTH + 6] == flash_buffer[MAGIC_NUMBER_LENGTH + 6] &&
-        get_preset_has_changes() == false &&
-        get_scale_has_changes()  == false) { return 0; }
-
-    // Reserving bytes MAGIC_NUMBER_LENGTH + [7-11] for future firmware versions
-
-    // Add user presets to the write buffer
-    uint8_t offset = MAGIC_NUMBER_LENGTH + 12;
-    for (uint8_t i = 0; i < NUM_PRESET_SLOTS; i++) {
-        for (uint8_t j = 0; j < PROGRAM_PARAMS_NUM; j++) {
-            flash_buffer[offset++] = user_presets[i][j];
-        }
+struct flash_transaction_t { uint32_t offset; uint8_t record[SETTINGS_RECORD_BYTES]; };
+static void flash_transaction(void *context) {
+    auto *tx=(flash_transaction_t*)context;
+    flash_range_erase(tx->offset,FLASH_SECTOR_SIZE);
+    flash_range_program(tx->offset,tx->record,SETTINGS_RECORD_BYTES);
+}
+static settings_data_t capture_settings() {
+    settings_data_t data{};
+    data.key=get_key();data.scale=get_scale();data.instrument=get_instrument();data.imu_axes=get_imu_axes();
+    data.volume=get_volume();data.contrast=get_contrast();data.chord=get_chord_mode();
+    for(unsigned i=0;i<4;i++){memcpy(data.presets[i],user_presets[i],PROGRAM_PARAMS_NUM);memcpy(data.scales[i],user_scales[i],12);}
+    return data;
+}
+static void persistence_task() {
+    uint8_t slot,values[PROGRAM_PARAMS_NUM];
+    while(synth_take_capture(&slot,values)){
+        memcpy(user_presets[slot],values,PROGRAM_PARAMS_NUM);set_preset_has_changes(true);
+        set_instrument(USER_INSTRUMENT_BASE+slot);request_flash_write();display_request_refresh();
     }
-
-    // Add user scales to the write buffer
-    for (uint8_t i = 0; i < NUM_SCALE_SLOTS; i++) {
-        for (uint8_t j = 0; j < 12; j++) {
-            flash_buffer[offset++] = user_scales[i][j];
-        }
+    if(!save_pending || time_us_64()<save_due_us)return;
+#if DODEPAN_DISABLE_PERSISTENCE
+    return;
+#endif
+    if(notes_any_active() || touch_any_held() || looper_is_playing() || looper_is_recording() || demo_is_playing()){
+        synth_request_suspend(false);return;
     }
-
-    // Turn on built-in LED
-    gpio_put(PICO_DEFAULT_LED_PIN, 1);
-
-    // Stop audio and synth processes on core1
-    multicore_reset_core1();
-
-    // Disable interrupts, write, and restore interrupts
-    uint32_t ints_id = save_and_disable_interrupts();
-	flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE); // Required for flash_range_program to work
-	flash_range_program(FLASH_TARGET_OFFSET, flash_buffer, FLASH_PAGE_SIZE);
-	restore_interrupts (ints_id);
-
-    // Restart processes on core1
-    multicore_launch_core1(core1_main);
-
-    // Wash "dirty" flags
-    set_preset_has_changes(false);
-    set_scale_has_changes(false);
-
-    // Turn off built-in LED
-    gpio_put(PICO_DEFAULT_LED_PIN, 0);
-
-    return 0;
+    settings_data_t data=capture_settings();
+    if(have_saved_settings && !memcmp(&data,&saved_settings,sizeof(data))){
+        save_pending=false;synth_request_suspend(false);display_request_refresh();return;
+    }
+    synth_diagnostics_t audio;synth_get_diagnostics(&audio);
+    if(audio.quiet_ms<250)return;
+    synth_request_suspend(true);if(!audio.suspended)return;
+    flash_transaction_t tx{};int next=saved_sector==0?1:0;
+    tx.offset=next?SETTINGS_SECTOR_B:SETTINGS_SECTOR_A;
+    bool ok=settings_encode(tx.record,sizeof(tx.record),NUM_SCALES,&data,saved_generation+1);
+    if(ok)ok=flash_safe_execute(flash_transaction,&tx,1000)==PICO_OK;
+    settings_data_t verify;uint32_t generation;
+    if(ok)ok=settings_decode((const uint8_t*)(XIP_BASE+tx.offset),SETTINGS_RECORD_BYTES,NUM_SCALES,&verify,&generation) && generation==saved_generation+1 && !memcmp(&verify,&data,sizeof(data));
+    if(ok){saved_sector=next;saved_generation++;saved_settings=data;have_saved_settings=true;save_pending=false;set_preset_has_changes(false);set_scale_has_changes(false);}
+    else save_due_us=time_us_64()+5000000;
+    synth_request_suspend(false);display_request_refresh();
 }
 
-void request_flash_write() {
-    // Schedule writing settings to flash.
-    // This delay is introduced to minimize write operations.
-    if (flash_write_alarm_id) cancel_alarm(flash_write_alarm_id);
-    flash_write_alarm_id = add_alarm_in_ms(FLASH_WRITE_DELAY_S * 1000, write_flash_data, NULL, true);
+void request_flash_write(){
+    save_pending=true;save_due_us=time_us_64()+(uint64_t)FLASH_WRITE_DELAY_S*1000000;
+    display_request_refresh();
 }
 
-void submit_preset_slot() {
-    int8_t slot = get_preset_slot();
-    if(slot == -1) { return; }
-    for (uint8_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
-        user_presets[slot][i] = get_argument_from_parameter(i);
-    }
-    set_preset_has_changes(true);
-    request_flash_write();
-
-    // Since we've written a preset, let's select it on the main screen
-    set_instrument(9 + slot);
+void submit_preset_slot(){
+#if DODEPAN_ENGINE_218
+    return; // Read-only conversion evaluation; native bank persistence is a separate migration.
+#endif
+    int8_t slot=get_preset_slot();if(slot<0 || slot>=NUM_PRESET_SLOTS)return;
+    g_synth.capture_preset((uint8_t)slot);
 }
 
 void submit_scale_slot() {
@@ -311,9 +279,7 @@ void submit_scale_slot() {
 
 /* Note and audio */
 
-uint8_t get_note_by_id(uint8_t id) {
-    return get_key() + get_extended_scale(id);
-}
+uint8_t get_note_by_id(uint8_t id){if(id>=12)return 0;unsigned n=(unsigned)get_key()+get_extended_scale(id);return n<=127?n:127;}
 
 // Chord interval definitions in semitones
 // Power chord: root + perfect 5th (7 semitones)
@@ -322,61 +288,104 @@ uint8_t get_note_by_id(uint8_t id) {
 #define INTERVAL_THIRD  4   // Major 3rd = 4 semitones
 #define INTERVAL_FIFTH  7   // Perfect 5th = 7 semitones
 
-// Track active chord notes for each pad (for proper note_off)
-static uint8_t active_chord_notes[12][3];  // [pad_id][note_index] - max 3 notes per chord
-static uint8_t active_chord_count[12];     // How many notes active per pad
-
-static const struct sound_i2s_config sound_config = {
-    .pio_num         = I2S_PIO_NUM,
-    .pin_scl         = I2S_CLOCK_PIN_BASE,
-    .pin_sda         = I2S_DATA_PIN,
-    .pin_ws          = I2S_CLOCK_PIN_BASE + 1,
-    .sample_rate     = SOUND_OUTPUT_FREQUENCY,
-    .bits_per_sample = 16,
-    .samples_per_buffer = AUDIO_BUFFER_LENGTH,
+// Voicing interval tables (semitones from root)
+// Each voicing has up to 5 intervals; 0xFF marks end
+static const uint8_t voicing_intervals[NUM_VOICINGS][5] = {
+    {0xFF, 0xFF, 0xFF, 0xFF, 0xFF},  // VOICING_BASE - handled specially
+    {4, 8, 0xFF, 0xFF, 0xFF},         // VOICING_AUG: augmented [0,4,8]
+    {3, 6, 0xFF, 0xFF, 0xFF},         // VOICING_DIM: diminished [0,3,6]
+    {4, 7, 0xFF, 0xFF, 0xFF},         // VOICING_MAJ: major [0,4,7]
+    {3, 7, 0xFF, 0xFF, 0xFF},         // VOICING_MIN: minor [0,3,7]
+    {4, 7, 10, 0xFF, 0xFF},           // VOICING_DOM7: dom7 [0,4,7,10]
+    {4, 7, 11, 0xFF, 0xFF},           // VOICING_MAJ7: maj7 [0,4,7,11]
+    {3, 7, 10, 0xFF, 0xFF},           // VOICING_MIN7: min7 [0,3,7,10]
+    {5, 7, 0xFF, 0xFF, 0xFF},         // VOICING_SUS4: sus4 [0,5,7]
+    {2, 7, 0xFF, 0xFF, 0xFF},         // VOICING_SUS2: sus2 [0,2,7]
+    {4, 7, 9, 0xFF, 0xFF},            // VOICING_6TH: 6th [0,4,7,9]
+    {4, 7, 10, 14, 0xFF},             // VOICING_9TH: 9th [0,4,7,10,14]
 };
 
-static inline uint32_t tudi_midi_write24 (uint8_t jack_id, uint8_t b1, uint8_t b2, uint8_t b3) {
-    uint8_t msg[3] = { b1, b2, b3 };
-    return tud_midi_stream_write(jack_id, msg, 3);
+// Tilt zone to voicing mapping (3x3 grid)
+// Layout:   col0(left)  col1(center)  col2(right)
+// row0(up):    aug       Maj/min       dom7
+// row1(mid):   dim       (base)        Maj7/m7
+// row2(down):  6/sus2    sus4          9
+static const uint8_t tilt_zone_voicing[9] = {
+    VOICING_AUG,   VOICING_MAJ,  VOICING_DOM7,   // row 0 (tilt up/away)
+    VOICING_DIM,   VOICING_BASE, VOICING_MAJ7,   // row 1 (level)
+    VOICING_SUS2,  VOICING_SUS4, VOICING_9TH,    // row 2 (tilt down/toward)
+};
+
+static uint8_t active_chord_notes[12][5],active_chord_count[12];
+static bool pad_held[12];
+static uint8_t pad_root_note[12],pad_velocity[12],pad_owner[12];
+void note_off(uint8_t id);
+
+// Core-0-only USB packet queue. Never block control processing on the host.
+static uint8_t midi_packets[256][4];
+static uint16_t midi_read,midi_write,midi_count;
+
+static bool midi_panic_pending;
+static inline uint32_t tudi_midi_write24(uint8_t jack,uint8_t status,uint8_t a,uint8_t b){
+    if(!tud_midi_mounted())return 0;
+    if(midi_panic_pending)return 0;
+    if(midi_count==256){midi_count=midi_read=midi_write=0;midi_overflows++;midi_panic_pending=true;return 0;}
+    uint8_t *p=midi_packets[midi_write];p[0]=(jack<<4)|(status>>4);p[1]=status;p[2]=a;p[3]=b;
+    midi_write=(midi_write+1)&255;midi_count++;return 3;
+}
+static void midi_output_task(){
+    static uint8_t panic_step;
+    if(!tud_midi_mounted()){midi_count=midi_read=midi_write=0;midi_panic_pending=false;panic_step=0;return;}
+    // USB-MIDI packet API accepts a complete event or retains it for retry.
+    if(midi_panic_pending){
+        const uint8_t controllers[]={64,123,120};
+        uint8_t p[]={0x0b,0xb0,controllers[panic_step],0};
+        if(tud_midi_packet_write(p) && ++panic_step==3){panic_step=0;midi_panic_pending=false;}
+        return;
+    }
+    panic_step=0;
+    for(unsigned i=0;i<16 && midi_count;i++){
+        if(!tud_midi_packet_write(midi_packets[midi_read]))break;
+        midi_read=(midi_read+1)&255;midi_count--;
+    }
 }
 
 // Helper functions for playing notes, callable from C (arpeggiator.c)
 extern "C" {
 
-// Helper to play a single note (internal synth + MIDI)
-// Called by both note_on and the arpeggiator
-void play_single_note(uint8_t note, uint8_t velocity) {
-    g_synth.note_on(note, velocity);
+// Get current tilt zone for display (callable from C)
+uint8_t get_tilt_zone() {
+    return imu_data.tilt_zone;
+}
+void note_sink_on(uint8_t n,uint8_t v){g_synth.note_on(n,v);
 #if defined(USE_MIDI)
-    tudi_midi_write24(0, 0x90, note, velocity);
+    tudi_midi_write24(0,0x90,n,v);
 #endif
 }
+void note_sink_off(uint8_t n){g_synth.note_off(n);
+#if defined(USE_MIDI)
+    tudi_midi_write24(0,0x80,n,0);
+#endif
+}
+void note_sink_cc(uint8_t c,uint8_t v){g_synth.control_change(c,v);
+#if defined(USE_MIDI)
+    tudi_midi_write24(0,0xb0,c,v);
+#endif
+}
+// Helper to play a single note (internal synth + MIDI)
+// Called by both note_on and the arpeggiator
+void play_single_note(uint8_t n,uint8_t v){notes_on(NOTE_SOURCE_ARP,n,v);}
 
 // Helper to stop a single note (internal synth + MIDI)
 // Called by both note_off and the arpeggiator
-void stop_single_note(uint8_t note) {
-    g_synth.note_off(note);
-#if defined(USE_MIDI)
-    tudi_midi_write24(0, 0x80, note, 0);
-#endif
-}
+void stop_single_note(uint8_t n){notes_off(NOTE_SOURCE_ARP,n);}
 
 // Looper playback hooks (called from looper.c)
-void looper_send_note_on(uint8_t note, uint8_t velocity) {
-    play_single_note(note, velocity);
-}
+void looper_send_note_on(uint8_t n,uint8_t v){notes_on(NOTE_SOURCE_LOOP,n,v);}
 
-void looper_send_note_off(uint8_t note) {
-    stop_single_note(note);
-}
+void looper_send_note_off(uint8_t n){notes_off(NOTE_SOURCE_LOOP,n);}
 
-void looper_send_cc(uint8_t cc_number, uint8_t value) {
-    g_synth.control_change(cc_number, value);
-#if defined(USE_MIDI)
-    tudi_midi_write24(0, 0xB0, cc_number, value);
-#endif
-}
+void looper_send_cc(uint8_t c,uint8_t v){notes_control(NOTE_SOURCE_LOOP,c,v);}
 
 void looper_send_pitch(int16_t pitch_bend) {
     int16_t bend = pitch_bend + 8192; // Convert signed back to 14-bit MIDI range
@@ -392,127 +401,66 @@ void looper_send_pitch(int16_t pitch_bend) {
 
 } // extern "C"
 
-void note_on(uint8_t id, uint8_t velocity) {
-    uint8_t note = get_note_by_id(id);
-    uint8_t chord_mode = get_chord_mode();
-    
-    // Reset active notes for this pad
-    active_chord_count[id] = 0;
-    
-    // Always play root note
-    play_single_note(note, velocity);
-    looper_record_note(note, velocity, true);
-    active_chord_notes[id][active_chord_count[id]++] = note;
-    
-    switch(chord_mode) {
-        case CHORD_OFF:
-            // Already played the root note
-            break;
-            
-        case CHORD_POWER: {
-            // Root + Perfect 5th (7 semitones up)
-            uint8_t fifth = note + INTERVAL_FIFTH;
-            if (fifth <= 127) {
-                sleep_us(100);  // Brief delay for voice allocation
-                play_single_note(fifth, velocity);
-                looper_record_note(fifth, velocity, true);
-                active_chord_notes[id][active_chord_count[id]++] = fifth;
-            }
-            break;
+static uint8_t make_chord(uint8_t root,uint8_t mode,uint8_t zone,uint8_t *notes){
+    uint8_t count=0;notes[count++]=root;
+    uint8_t local[5]={0xff,0xff,0xff,0xff,0xff};const uint8_t *intervals=local;
+    if(mode==CHORD_POWER)local[0]=7;
+    if(mode==CHORD_TRIAD){local[0]=4;local[1]=7;}
+    if(mode==CHORD_OCTAVE)local[0]=12;
+    if(mode==CHORD_TILT){uint8_t v=tilt_zone_voicing[zone<9?zone:4];if(v==VOICING_BASE)v=VOICING_MAJ;intervals=voicing_intervals[v];}
+    for(unsigned i=0;i<5 && intervals[i]!=0xff && count<5;i++){unsigned n=(unsigned)root+intervals[i];if(n<=127)notes[count++]=(uint8_t)n;}
+    return count;
+}
+void note_on(uint8_t id,uint8_t velocity){
+    if(id>=12)return;note_off(id);
+    uint8_t mode=get_chord_mode();pad_root_note[id]=get_note_by_id(id);pad_velocity[id]=velocity;pad_held[id]=true;
+    if(mode!=CHORD_OFF)g_synth.control_change(VOICE_MODE,VOICE_POLYPHONIC);
+    active_chord_count[id]=make_chord(pad_root_note[id],mode,imu_data.tilt_zone,active_chord_notes[id]);
+    for(unsigned i=0;i<active_chord_count[id];i++){uint8_t n=active_chord_notes[id][i];notes_on(id,n,velocity);looper_record_note(n,velocity,true);}
+}
+
+void note_off(uint8_t id){
+    if(id>=12)return;pad_held[id]=false;
+    for(unsigned i=0;i<active_chord_count[id];i++){uint8_t n=active_chord_notes[id][i];notes_off(id,n);looper_record_note(n,0,false);}
+    active_chord_count[id]=0;
+}
+
+// Update chord voicing for all held pads when tilt zone changes (rolling chords)
+// Retain common pitches; send balanced releases and onsets for changed pitches.
+void tilt_chord_update(){
+    if(get_chord_mode()!=CHORD_TILT)return;
+    for(uint8_t id=0;id<12;id++)if(pad_held[id]){
+        uint8_t target[5];uint8_t count=make_chord(pad_root_note[id],CHORD_TILT,imu_data.tilt_zone,target);
+        for(unsigned i=0;i<active_chord_count[id];i++){
+            uint8_t n=active_chord_notes[id][i];bool keep=false;for(unsigned j=0;j<count;j++)keep|=target[j]==n;
+            if(!keep){notes_off(id,n);looper_record_note(n,0,false);}
         }
-        
-        case CHORD_TRIAD: {
-            // Root + Major 3rd (4 semitones) + Perfect 5th (7 semitones)
-            uint8_t third = note + INTERVAL_THIRD;
-            uint8_t fifth = note + INTERVAL_FIFTH;
-            if (third <= 127) {
-                sleep_us(100);  // Brief delay for voice allocation
-                play_single_note(third, velocity);
-                looper_record_note(third, velocity, true);
-                active_chord_notes[id][active_chord_count[id]++] = third;
-            }
-            if (fifth <= 127) {
-                sleep_us(100);  // Brief delay for voice allocation
-                play_single_note(fifth, velocity);
-                looper_record_note(fifth, velocity, true);
-                active_chord_notes[id][active_chord_count[id]++] = fifth;
-            }
-            break;
+        for(unsigned i=0;i<count;i++){
+            uint8_t n=target[i];bool old=false;for(unsigned j=0;j<active_chord_count[id];j++)old|=active_chord_notes[id][j]==n;
+            if(!old){notes_on(id,n,pad_velocity[id]);looper_record_note(n,pad_velocity[id],true);}
         }
-        
-        case CHORD_OCTAVE: {
-            // Root + Octave (12 semitones up, not scale degrees)
-            uint8_t octave = note + 12;
-            if (octave <= 127) {  // MIDI note range check
-                sleep_us(100);  // Brief delay for voice allocation
-                play_single_note(octave, velocity);
-                looper_record_note(octave, velocity, true);
-                active_chord_notes[id][active_chord_count[id]++] = octave;
-            }
-            break;
-        }
+        memcpy(active_chord_notes[id],target,count);active_chord_count[id]=count;
     }
 }
 
-void note_off(uint8_t id) {
-    // Stop all notes that were started for this pad
-    for (uint8_t i = 0; i < active_chord_count[id]; i++) {
-        uint8_t note = active_chord_notes[id][i];
-        stop_single_note(note);
-        looper_record_note(note, 0, false);
-    }
-    active_chord_count[id] = 0;
+void touch_on(uint8_t id){
+    if(id>=12)return;set_pad_active(id,true);set_last_note(get_note_by_id(id));
+    pad_owner[id]=arpeggiator_is_enabled()?2:1;
+    if(pad_owner[id]==2)arpeggiator_pad_on(id,imu_data.acceleration);else note_on(id,imu_data.acceleration);
+    display_request_refresh();
 }
 
-void touch_on(uint8_t id) {
-    // Set the velocity according to accelerometer data.
-    // The range of velocity is 0-127, but here it's clamped to 64-127
-    uint8_t velocity = imu_data.acceleration;
-
-    // Track active pad and note for visual feedback
-    set_pad_active(id, true);
-    set_last_note(get_note_by_id(id));
-
-    // Route through arpeggiator if enabled
-    if (arpeggiator_is_enabled()) {
-        arpeggiator_pad_on(id, velocity);
-    } else {
-        note_on(id, velocity);
-    }
-
-    // Since a note_on event can start the looper recording,
-    // a display draw needs to be called here.
-#if defined (USE_DISPLAY)
-    display_draw(&display);
-#endif
+void touch_off(uint8_t id){
+    if(id>=12)return;set_pad_active(id,false);
+    if(pad_owner[id]==2)arpeggiator_pad_off(id);else if(pad_owner[id]==1)note_off(id);
+    pad_owner[id]=0;display_request_refresh();
 }
 
-void touch_off(uint8_t id) {
-    // Clear pad from active set
-    set_pad_active(id, false);
-
-    // Route through arpeggiator if enabled
-    if (arpeggiator_is_enabled()) {
-        arpeggiator_pad_off(id);
-    } else {
-        note_off(id);
-    }
-    
-#if defined (USE_DISPLAY)
-    display_draw(&display);
-#endif
+void release_live_notes(){
+    for(uint8_t id=0;id<12;id++){note_off(id);notes_release_source(id);pad_owner[id]=0;set_pad_active(id,false);}
+    arpeggiator_stop();notes_release_source(NOTE_SOURCE_ARP);
 }
-
-extern "C" void all_notes_off() {
-    g_synth.all_notes_off();
-    // Stop arpeggiator if running
-    arpeggiator_stop();
-    // Reset chord tracking state
-    for (uint8_t i = 0; i < 12; i++) {
-        active_chord_count[i] = 0;
-        set_pad_active(i, false);  // Clear visual indicator
-    }
-}
+extern "C" void all_notes_off(){release_live_notes();notes_panic();g_synth.all_notes_off();}
 
 // Use the IMU to alter parameters according to device tilting
 void tilt_process() {
@@ -549,22 +497,28 @@ void tilt_process() {
     }
 }
 
-static void __not_in_flash_func(i2s_audio_task)(void) {
-    static int16_t *last_buffer;
-    int16_t *buffer = sound_i2s_get_next_buffer();
-    int16_t right_buffer; // Necessary quirk for compatibility with
-                          // the original PRA32-U code
-            
-    if (buffer != last_buffer) { 
-        last_buffer = buffer;
-        for (int i = 0; i < AUDIO_BUFFER_LENGTH; i++) {
-        short sample = g_synth.process(right_buffer);
-        int temp = (int)sample * get_volume();
-        short output = (short)(temp >> 3);
-        *buffer++ = output;
-        *buffer++ = output;
-        }
+// Core-0 display/UART consumers share a one-second render-load window.
+extern "C" uint32_t get_cpu_avg_percent(){
+    static uint64_t last_us,last_total,last_buffers;
+    static uint32_t average;
+    uint64_t now=time_us_64();
+    if(now-last_us>=1000000){
+        synth_diagnostics_t d;synth_get_diagnostics(&d);
+        uint64_t rendered=d.render_total_us-last_total, buffers=d.render_buffers-last_buffers;
+        average=buffers?(uint32_t)(rendered*SOUND_OUTPUT_FREQUENCY/(buffers*AUDIO_TRANSPORT_FRAMES*10000ULL)):0;
+        last_total=d.render_total_us;last_buffers=d.render_buffers;last_us=now;
     }
+    return average;
+}
+extern "C" uint32_t get_cpu_max_percent(){
+    synth_diagnostics_t d;synth_get_diagnostics(&d);
+    return (uint32_t)((uint64_t)d.max_render_us*SOUND_OUTPUT_FREQUENCY/(AUDIO_TRANSPORT_FRAMES*10000ULL));
+}
+extern "C" void get_audio_error_counts(uint32_t *underruns,uint32_t *late,uint32_t *irq_misses){
+    synth_diagnostics_t s;synth_get_diagnostics(&s);
+    *underruns=*late=*irq_misses=0;if(!s.ready)return;
+    audio_diagnostics_t d;audio_get_diagnostics(&d);
+    *underruns=d.underruns;*late=d.late_publications;*irq_misses=d.irq_deadline_misses;
 }
 
 int64_t power_on_complete(alarm_id_t id, void *) {
@@ -599,18 +553,19 @@ void encoder_up() {
         break;
         case CTX_KEY:
             // D#7 is the highest note that can be set as root note
+            release_live_notes();
             set_key_up();
-            all_notes_off();
         break;
         case CTX_SCALE:
+            release_live_notes();
             set_scale_up();
-            all_notes_off();
         break;
         case CTX_INSTRUMENT:
             set_instrument_up();
             update_instrument();
         break;
         case CTX_CHORD:
+            release_live_notes();
             set_chord_mode_up();
             // Force polyphonic mode for chord support
             if (get_chord_mode() != CHORD_OFF) {
@@ -618,6 +573,7 @@ void encoder_up() {
             }
         break;
         case CTX_ARP_PATTERN:
+            release_live_notes();
             set_arp_pattern_up();
         break;
         case CTX_ARP_SPEED:
@@ -631,6 +587,7 @@ void encoder_up() {
         break;
         case CTX_VOLUME:
             set_volume_up();
+            request_flash_write();
         break;
         case CTX_CONTRAST:
             set_contrast_up();
@@ -655,6 +612,13 @@ void encoder_up() {
                 looper_restart_from_start();
             }
             set_context(CTX_LOOPER); // Keep context steady to avoid stray handlers
+        break;
+        case CTX_DEMO:
+            // Stop playback before changing song
+            if (demo_is_playing()) {
+                demo_stop();
+            }
+            demo_next_song();
         break;
         case CTX_SCALE_EDIT_STEP:
             set_step_up();
@@ -700,18 +664,19 @@ void encoder_down() {
 #endif
         break;
         case CTX_KEY:
+            release_live_notes();
             set_key_down();
-            all_notes_off();
         break;
         case CTX_SCALE:
+            release_live_notes();
             set_scale_down();
-            all_notes_off();
         break;
         case CTX_INSTRUMENT:
             set_instrument_down();
             update_instrument();
         break;
         case CTX_CHORD:
+            release_live_notes();
             set_chord_mode_down();
             // Force polyphonic mode for chord support
             if (get_chord_mode() != CHORD_OFF) {
@@ -719,6 +684,7 @@ void encoder_down() {
             }
         break;
         case CTX_ARP_PATTERN:
+            release_live_notes();
             set_arp_pattern_down();
         break;
         case CTX_ARP_SPEED:
@@ -732,6 +698,7 @@ void encoder_down() {
         break;
         case CTX_VOLUME:
             set_volume_down();
+            request_flash_write();
         break;
         case CTX_CONTRAST:
             set_contrast_down();
@@ -756,6 +723,13 @@ void encoder_down() {
                 looper_restart_from_start();
             }
             set_context(CTX_LOOPER); // Keep context steady to avoid stray handlers
+        break;
+        case CTX_DEMO:
+            // Stop playback before changing song
+            if (demo_is_playing()) {
+                demo_stop();
+            }
+            demo_prev_song();
         break;
         case CTX_SCALE_EDIT_STEP:
             set_step_down();
@@ -786,7 +760,7 @@ void encoder_onchange(rotary_encoder_t *encoder) {
     long int position = encoder->position / 4; // Adjust the encoder sensitivity here
     if(last_position != position) {
         // Set flag for main loop to process (avoid I2C/display calls in interrupt context)
-        encoder_direction = (last_position < position ? 1 : -1);
+        if(encoder_direction>-128 && encoder_direction<128)encoder_direction += (last_position < position ? 1 : -1);
     }
     last_position = position;
 }
@@ -858,6 +832,11 @@ void button_long_press() {
             looper_disable();
             set_context(CTX_SELECTION);
         break;
+        case CTX_DEMO:
+            // Stop demo playback and exit
+            demo_stop();
+            set_context(CTX_SELECTION);
+        break;
         case CTX_INIT:
         case CTX_SYNTH_EDIT_STORE:
         case CTX_SCALE_EDIT_STORE:
@@ -904,6 +883,9 @@ void button_short_press() {
                     set_context(CTX_LOOPER);
                     looper_enable();
                 break;
+                case SELECTION_DEMO:
+                    set_context(CTX_DEMO);
+                break;
                 case SELECTION_IMU_CONFIG:
                     set_context(CTX_IMU_CONFIG);
                 break;
@@ -947,6 +929,14 @@ void button_short_press() {
         break;
         case CTX_LOOPER:
             looper_onpress();
+        break;
+        case CTX_DEMO:
+            // Toggle play/stop
+            if (demo_is_playing()) {
+                demo_stop();
+            } else {
+                demo_start();
+            }
         break;
         case CTX_SCALE_EDIT_STEP:
             set_context(CTX_SCALE_EDIT_DEG);
@@ -1024,22 +1014,14 @@ void bi_decl_all() {
 
 // Secondary core task - handles audio generation
 // With higher clock speed, single core can handle 4-voice polyphony
-void core1_main() {
-    while(true) {
-        g_synth.secondary_core_process();
-        i2s_audio_task();
-    }
-}
+void core1_main(){synth_audio_main();}
 
 int main() {
     // Adjust the clock speed to be an even multiplier
     // of the audio sampling frequency
     // RP2350 runs at higher clock for 4-voice polyphony on single core
-    if (SOUND_OUTPUT_FREQUENCY % 11025 == 0) { // For 22.05, 44.1, 88.2 kHz
-        set_sys_clock_khz(264600, false);  // 264.6 MHz (multiple of 44.1kHz base)
-    } else if (SOUND_OUTPUT_FREQUENCY % 8000 == 0) { // For 8, 16, 32, 48, 96, 192 kHz
-        set_sys_clock_khz(288000, false);  // 288 MHz (multiple of 48kHz)
-    }
+    // Use SYSTEM_CLOCK_KHZ from config.h - lower if experiencing instability
+    if(!set_sys_clock_khz(SYSTEM_CLOCK_KHZ, false))panic("Unsupported system clock");
     stdio_init_all();
 
     bi_decl_all();
@@ -1079,7 +1061,7 @@ int main() {
 #endif
 
     // Start the audio engine.
-    sound_i2s_init(&sound_config);
+    // Audio resources and DSP are initialized by core 1.
 
     // Start the synth
     g_synth.initialize();
@@ -1093,17 +1075,6 @@ int main() {
     set_preset_has_changes(false);
     set_scale_has_changes(false);
 
-    // Allocate memory for the user presets and scales arrays
-    user_presets = (uint8_t **)malloc(NUM_PRESET_SLOTS * sizeof(uint8_t *));
-    for (uint8_t i = 0; i < NUM_PRESET_SLOTS; i++) {
-        user_presets[i] = (uint8_t *)malloc(PROGRAM_PARAMS_NUM * sizeof(uint8_t));
-    }
-
-    user_scales = (uint8_t **)malloc(NUM_SCALE_SLOTS * sizeof(uint8_t *));
-    for (uint8_t i = 0; i < NUM_SCALE_SLOTS; i++) {
-        user_scales[i] = (uint8_t *)malloc(12 * sizeof(uint8_t));
-    }
-
     // Attempt to load previous settings, if stored on flash
     bool data_loaded = load_flash_data();
     if(!data_loaded) {
@@ -1115,7 +1086,7 @@ int main() {
         update_instrument();
         set_chord_mode(CHORD_OFF); // Single notes by default
         set_imu_axes(0x02); // Filter cutoff modulation enabled, pitch bending disabled
-        set_volume(8); // Max value
+        set_volume(VOLUME_DEFAULT);
         set_contrast(CONTRAST_AUTO); // Automatic dimming of display brightness
 #if defined (USE_DISPLAY)
         display_update_contrast(&display);
@@ -1134,6 +1105,11 @@ int main() {
         }
     }
 
+#if DODEPAN_DISABLE_PERSISTENCE
+    // This build cannot remember volume adjustments: never restore a stale loud level.
+    set_volume(0);
+#endif
+
     // Launch the routine on the second core
     multicore_launch_core1(core1_main);
 
@@ -1145,6 +1121,9 @@ int main() {
 
     // Initialize the arpeggiator
     arpeggiator_init();
+
+    // Initialize the demo player
+    demo_init();
 
     // Initialize the rotary encoder and switch
 #if defined (ENCODER_USE_PULLUPS)
@@ -1159,6 +1138,7 @@ int main() {
     imu_data.deviation_x = 0x2000;  // Center value
     imu_data.deviation_y = 64;      // Center value
     imu_data.acceleration = 127;    // Max value
+    imu_data.tilt_zone = 4;         // Center zone (base voicing) for CHORD_TILT mode
 
     // Use the onboard LED as a power-on indicator
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -1183,12 +1163,38 @@ int main() {
 #endif
 
     while (true) { // Main loop
+#if DODEPAN_POP_CAPTURE
+        tud_task();
+        if(pop_capture_task()){
+            static bool capture_stopped=false;
+            if(!capture_stopped){
+                looper_stop();demo_stop();all_notes_off();
+                midi_count=midi_read=midi_write=0;midi_panic_pending=true;
+                capture_stopped=true;
+            }
+            midi_output_task();continue;
+        }
+#endif
+        diagnostics_task();
         mpr121_task();
+        synth_set_volume(get_volume());
+        persistence_task();
+        synth_diagnostics_t queue_status;synth_get_diagnostics(&queue_status);
+        static uint32_t observed_overflows,observed_midi_overflows;
+        if(queue_status.queue_overflows!=observed_overflows || midi_overflows!=observed_midi_overflows){
+            observed_overflows=queue_status.queue_overflows;observed_midi_overflows=midi_overflows;
+            looper_stop();demo_stop();all_notes_off();synth_request_suspend(false);
+            update_instrument();display_request_refresh();
+        }
 
         // Process deferred encoder events (set from interrupt context)
         if (encoder_direction != 0) {
-            int8_t dir = encoder_direction;
-            encoder_direction = 0;  // Clear flag first to avoid missing events
+            uint32_t irq_state=save_and_disable_interrupts();
+            int32_t dir = encoder_direction;
+            encoder_direction -= dir>0?1:-1;
+            restore_interrupts(irq_state);
+            dir=dir>0?1:-1;
+            //  // Clear flag first to avoid missing events
             if (dir == 1) {
                 encoder_down();
             } else if (dir == -1) {
@@ -1207,23 +1213,56 @@ int main() {
         }
 
 #if defined (USE_IMU)
-        if(get_imu_axes() > 0) {
-            imu_task(&imu_data);
-            tilt_process();
+        // Run IMU task if axes control is enabled OR if CHORD_TILT mode needs tilt_zone
+        // Skip IMU polling during demo playback to reduce I2C bus contention
+        // Throttle to 20Hz (50ms) to reduce I2C bus load - human tilt response is ~100-200ms
+        if((get_imu_axes() > 0 || get_chord_mode() == CHORD_TILT) && !demo_is_playing() && !DODEPAN_DISABLE_IMU) {
+            static uint64_t last_imu_poll_ms = 0;
+            uint64_t now_ms = time_us_64() / 1000;
+            if (now_ms - last_imu_poll_ms >= 50) {
+                last_imu_poll_ms = now_ms;
+                static uint8_t prev_tilt_zone = 4;
+                imu_task(&imu_data);
+                // Only process pitch bend / filter CC when axes control is enabled
+                if(get_imu_axes() > 0) {
+                    tilt_process();
+                }
+                // Handle tilt zone changes in CHORD_TILT mode
+                if(get_chord_mode() == CHORD_TILT && imu_data.tilt_zone != prev_tilt_zone) {
+                    prev_tilt_zone = imu_data.tilt_zone;
+                    // Update rolling chords for any held pads
+                    tilt_chord_update();
+                    // Request display refresh if on chord mode screen
+                    if(get_selection() == SELECTION_CHORD) {
+                        display_request_refresh();
+                    }
+                }
+            }
         }
 #endif
 
 #if defined (USE_DISPLAY)
         // Process any deferred display updates (when I2C was busy during touch/encoder events)
+        // Skip display updates during demo playback if DEBUG_DEMO_NO_DISPLAY is defined
+#ifdef DEBUG_DEMO_NO_DISPLAY
+        if(display_is_pending() && !demo_is_playing() && !DODEPAN_DISABLE_IMU) {
+            display_draw(&display);
+        }
+#else
         if(display_is_pending()) {
             display_draw(&display);
         }
 #endif
+#endif
 
         looper_task();
         arpeggiator_task();
+        demo_task();
 #if defined (USE_MIDI)
         tud_task(); // tinyusb device task
+        midi_output_task();
 #endif
+
+
     }
 }

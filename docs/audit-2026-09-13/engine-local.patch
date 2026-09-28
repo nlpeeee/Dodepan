@@ -1,0 +1,15 @@
+--- v1.6.0/Digital-Synth-PRA32-U2/pra32-u2-synth.h
++++ local/Digital-Synth-PRA32-U2/pra32-u2-synth.h
+@@ -1507,9 +1507,10 @@
+       VOICE_LEGATO,
+     };
+ #else  // defined(PRA32_U2_USE_2_CORES_FOR_SIGNAL_PROCESSING)
++    // Allow polyphony on single core with higher clock speed (RP2350 at 288MHz)
+     static uint8_t voice_mode_table[6] = {
+-      VOICE_MONOPHONIC,
+-      VOICE_MONOPHONIC,
++      VOICE_POLYPHONIC,
++      VOICE_POLYPHONIC,
+       VOICE_MONOPHONIC,
+       VOICE_MONOPHONIC,
+       VOICE_LEGATO_PORTA,

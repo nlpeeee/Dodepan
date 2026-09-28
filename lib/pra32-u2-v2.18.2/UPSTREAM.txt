@@ -1,0 +1,4 @@
+PRA32-U2 v2.18.2
+https://github.com/risgk/digital-synth-pra32-u2
+ad082d08d825e979023f1dc7cae9f6a0dab45af5
+Vendored without DSP changes.

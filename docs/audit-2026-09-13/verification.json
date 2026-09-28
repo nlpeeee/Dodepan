@@ -1,0 +1,30 @@
+{
+  "verified_utc": "2026-09-13T17:57:43.040105+00:00",
+  "original_files_checked": 180,
+  "original_files_changed": [],
+  "staged_index_content_preserved": true,
+  "local_markdown_links_checked": 33,
+  "broken_links": [],
+  "python_scripts_syntax_checked": [
+    "build_baseline.py",
+    "check_engine_api.py",
+    "check_structure.py",
+    "prepare_tools.py",
+    "run_host_probes.py",
+    "run_main_probes.py"
+  ],
+  "final_build_exit_code": 0,
+  "baseline_artifact_hashes_still_match": true,
+  "production_firmware_modified": false,
+  "hardware_test_status": "pending; no device accessed",
+  "host_checks": {
+    "total": 29,
+    "passed": 5,
+    "failed": 24
+  },
+  "engine_api_outcomes": [
+    0,
+    1,
+    0
+  ]
+}

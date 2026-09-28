@@ -1,8 +1,13 @@
 #ifndef INSTRUMENT_PRESET_H
 #define INSTRUMENT_PRESET_H
 
+#include <stdint.h>
 #include "pra32-u2-constants.h"
-#define PROGRAM_PARAMS_NUM 45
+#define PROGRAM_PARAMS_NUM 48
+// Legacy preset selection applied only the first 45 controls. Keep the last
+// three delay controls at their current engine values, while storing all 48.
+#define PRESET_APPLY_PARAMS_NUM 45
+#include "instrument_layout.h"
 
 const uint8_t dodepan_program_parameters[] = {
     OSC_1_WAVE     ,
@@ -486,4 +491,17 @@ const uint8_t bleep_bloop_preset[] = {
       1, // DELAY_MODE - Ping pong for bounce
 };
 
+#ifdef __cplusplus
+static_assert(sizeof(dodepan_program_parameters)==PROGRAM_PARAMS_NUM,"Preset parameter count");
+static_assert(sizeof(dodepan_preset)==PROGRAM_PARAMS_NUM,"Dodepan preset count");
+#else
+_Static_assert(sizeof(dodepan_program_parameters)==PROGRAM_PARAMS_NUM,"Preset parameter count");
+#endif
+#ifdef __cplusplus
+static_assert(sizeof(magic_bell_preset)==PROGRAM_PARAMS_NUM, "Magic Bell parameter count");
+static_assert(sizeof(space_piano_preset)==PROGRAM_PARAMS_NUM, "Space Piano parameter count");
+static_assert(sizeof(robot_voice_preset)==PROGRAM_PARAMS_NUM, "Robot Voice parameter count");
+static_assert(sizeof(synthwave_preset)==PROGRAM_PARAMS_NUM, "Synthwave parameter count");
+static_assert(sizeof(bleep_bloop_preset)==PROGRAM_PARAMS_NUM, "Bleep Bloop parameter count");
+#endif
 #endif

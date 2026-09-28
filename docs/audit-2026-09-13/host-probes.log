@@ -1,0 +1,17 @@
+PASS loop-normal: note-off inside the loop is delivered
+FAIL loop-boundary: note-off exactly at loop end must precede restart
+FAIL loop-late-task: late task must drain note-off before wrapping
+FAIL loop-pause: pausing playback releases its sounding notes
+FAIL loop-limit-idle: 20-second recording limit works without further events
+FAIL loop-capacity: capacity exhaustion cannot discard a required release
+FAIL loop-paused-release: release after pause must not erase recording and re-arm
+PASS arp-gate: 80-percent gate emits a release
+FAIL arp-disable: disabling arpeggiator releases current note
+FAIL arp-octave-change: reducing octave range does not underflow note calculation
+FAIL arp-clock-wrap: microsecond-clock wrap must not trigger an early gate/step
+PASS arp-pad-release: releasing last held pad stops the arpeggio
+FAIL demo-tempo: tempo changes integrate elapsed time piecewise
+PASS demo-stop: demo stop reaches stopped state and releases sink
+PASS demo-restart: restart resets the embedded-song parser
+FAIL demo-zero-division: zero ticks per quarter is rejected
+RESULT 16 checks, 11 failures

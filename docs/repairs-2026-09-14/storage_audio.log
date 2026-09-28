@@ -1,0 +1,25 @@
+PASS full 48-parameter round trip
+PASS newest sector
+PASS all torn record prefixes preserve prior sector
+PASS every single-byte record corruption rejected
+PASS truncated record rejected
+PASS generation wrap
+PASS all legacy slots and scales preserved
+PASS invalid parameter rejected
+PASS invalid scale degree rejected
+PASS invalid instrument rejected
+PASS no producer reuse of ready buffers
+PASS current and queued DMA buffers retained
+PASS stale publication rejected
+PASS ready FIFO ordering
+PASS zero and full-scale IMU
+PASS integer square root boundaries
+PASS shared pitch retained
+PASS last owner releases
+PASS shared sustain retained
+PASS last sustain released
+PASS zero velocity is not an onset
+PASS panic empties all owners
+PASS maximum loop duplicate count retains final owner
+PASS maximum loop duplicate count releases finally
+RESULT 24 checks, 0 failures

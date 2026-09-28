@@ -1,0 +1,3049 @@
+--- pre-repair/CMakeLists.txt
++++ repaired/CMakeLists.txt
+@@ -13,10 +13,17 @@
+ set(CMAKE_C_STANDARD 11)
+ set(CMAKE_CXX_STANDARD 17)
+  
++if (NOT PICO_BOARD STREQUAL "pico2")
++    message(FATAL_ERROR "This firmware requires Pico 2/RP2350 with 4 MiB flash")
++endif()
++set(PICO_FLASH_SIZE_BYTES "4 * 1024 * 1024 - 8192")
+ pico_sdk_init()
+ 
+ add_executable(${PROJECT_NAME}
+         main.cpp
++        synth_service.cpp
++        settings_store.c
++        note_router.c
+ )
+ 
+ add_subdirectory(lib/pico-mpr121/lib mpr121)
+@@ -53,6 +60,7 @@
+         hardware_dma
+         hardware_adc
+         hardware_flash
++        pico_flash
+         pico-mpr121
+         pico_multicore
+         sound_i2s_16bits
+@@ -68,4 +76,37 @@
+ pico_add_extra_outputs(${PROJECT_NAME})
+ 
+ pico_enable_stdio_usb(${PROJECT_NAME} 0)
+-pico_enable_stdio_uart(${PROJECT_NAME} 1)
++pico_enable_stdio_uart(${PROJECT_NAME} 0)
++
++target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-T,${CMAKE_CURRENT_LIST_DIR}/storage_reservation.ld")
++
++target_compile_definitions(${PROJECT_NAME} PRIVATE PICO_STACK_SIZE=4096 PICO_CORE1_STACK_SIZE=4096)
++
++set(DODEPAN_CLOCK_KHZ 288000 CACHE STRING "Experimental system clock in kHz")
++set(DODEPAN_BUFFER_FRAMES 128 CACHE STRING "Audio frames per buffer (1..256)")
++if(DODEPAN_BUFFER_FRAMES LESS 1 OR DODEPAN_BUFFER_FRAMES GREATER 256)
++    message(FATAL_ERROR "Audio buffer must contain 1..256 frames")
++endif()
++target_compile_definitions(${PROJECT_NAME} PRIVATE SYSTEM_CLOCK_KHZ=${DODEPAN_CLOCK_KHZ} AUDIO_BUFFER_LENGTH=${DODEPAN_BUFFER_FRAMES})
++foreach(feature DISPLAY IMU PERSISTENCE)
++    option(DODEPAN_DISABLE_${feature} "Disable ${feature} for controlled diagnostics" OFF)
++    target_compile_definitions(${PROJECT_NAME} PRIVATE DODEPAN_DISABLE_${feature}=$<BOOL:${DODEPAN_DISABLE_${feature}}>)
++endforeach()
++option(DODEPAN_UART_DIAGNOSTICS "Emit bounded diagnostics on UART1 GPIO8/9" OFF)
++target_compile_definitions(${PROJECT_NAME} PRIVATE DODEPAN_UART_DIAGNOSTICS=$<BOOL:${DODEPAN_UART_DIAGNOSTICS}>)
++
++file(GLOB_RECURSE identity_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/*.c" "${CMAKE_CURRENT_LIST_DIR}/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/*.h" "${CMAKE_CURRENT_LIST_DIR}/*.pio" "${CMAKE_CURRENT_LIST_DIR}/*.ld")
++list(FILTER identity_files EXCLUDE REGEX "/(build[^/]*|tools|\\.git)/")
++list(SORT identity_files)
++set(identity "")
++foreach(source IN LISTS identity_files)
++    file(SHA256 "${source}" digest)
++    string(APPEND identity "${digest}")
++endforeach()
++string(SHA256 identity "${identity}")
++string(SUBSTRING "${identity}" 0 16 identity)
++target_compile_definitions(${PROJECT_NAME} PRIVATE DODEPAN_SOURCE_ID="${identity}")
++
++file(SHA256 "${CMAKE_CURRENT_LIST_DIR}/lib/digital-synth-pra32-u2/Digital-Synth-PRA32-U2/pra32-u2-synth.h" engine_identity)
++string(SUBSTRING "${engine_identity}" 0 16 engine_identity)
++target_compile_definitions(${PROJECT_NAME} PRIVATE DODEPAN_ENGINE_ID="${engine_identity}")
+--- pre-repair/arpeggiator.c
++++ repaired/arpeggiator.c
+@@ -1,319 +1,61 @@
+-#include "pico/stdlib.h"
+-#include <stdlib.h>
++#include "arpeggiator.h"
+ #include "config.h"
+ #include "state.h"
+ #include "looper.h"
+-#include "arpeggiator.h"
+-
+-// External functions from main.cpp for playing notes
+-extern void play_single_note(uint8_t note, uint8_t velocity);
++#include "note_router.h"
++#include <stdlib.h>
++#include <string.h>
++extern void play_single_note(uint8_t note,uint8_t velocity);
+ extern void stop_single_note(uint8_t note);
+-
+-// Arpeggiator state
+-typedef struct {
+-    uint16_t held_pads;         // Bitmask of currently held pads (bits 0-11)
+-    uint8_t held_count;         // Number of held pads
+-    uint8_t held_order[12];     // Pads in order they were pressed (for sorting)
+-    uint8_t velocity;           // Velocity to use for arpeggiated notes
+-    
+-    uint8_t current_index;      // Current position in the arp sequence
+-    uint8_t current_octave;     // Current octave offset (0, 1, or 2)
+-    int8_t direction;           // 1 = ascending, -1 = descending (for up-down)
+-    
+-    uint8_t current_note;       // Currently playing note (for note_off)
+-    uint8_t current_pad;        // Pad ID of currently playing note (for looper recording)
+-    bool note_playing;          // Is a note currently sounding?
+-    
+-    uint32_t last_step_time;    // Timestamp of last step
+-    uint32_t note_on_time;      // Timestamp when current note started
+-} arpeggiator_t;
+-
+-static arpeggiator_t arp;
+-
+-// Get interval in milliseconds from state
+-static uint32_t get_interval_ms() {
+-    uint16_t speed = get_arp_speed_ms();
+-    // Ensure valid range
+-    if (speed < ARP_SPEED_MIN) return ARP_SPEED_MIN;
+-    if (speed > ARP_SPEED_MAX) return ARP_SPEED_MAX;
+-    return speed;
+-}
+-
+-// Get the sorted list of held pads (low to high by note)
+-static void get_sorted_pads(uint8_t *sorted, uint8_t *count) {
+-    *count = 0;
+-    
+-    // Collect held pads
+-    for (uint8_t i = 0; i < 12; i++) {
+-        if (arp.held_pads & (1 << i)) {
+-            sorted[(*count)++] = i;
+-        }
+-    }
+-    
+-    // Sort by note value (bubble sort is fine for max 12 items)
+-    // Guard against count < 2 to avoid underflow
+-    if (*count < 2) return;
+-    
+-    for (uint8_t i = 0; i < *count - 1; i++) {
+-        for (uint8_t j = 0; j < *count - i - 1; j++) {
+-            uint8_t note_a = get_note_by_id(sorted[j]);
+-            uint8_t note_b = get_note_by_id(sorted[j + 1]);
+-            if (note_a > note_b) {
+-                uint8_t temp = sorted[j];
+-                sorted[j] = sorted[j + 1];
+-                sorted[j + 1] = temp;
+-            }
+-        }
+-    }
+-}
+-
+-// Get the next pad in the sequence based on pattern
+-static bool get_next_step(uint8_t *pad_id, uint8_t *octave_offset) {
+-    if (arp.held_count == 0) return false;
+-    
+-    uint8_t sorted[12];
+-    uint8_t count;
+-    get_sorted_pads(sorted, &count);
+-    
+-    if (count == 0) return false;
+-    
+-    uint8_t pattern = get_arp_pattern();
+-    uint8_t max_octaves = get_arp_octave() + 1;  // 1, 2, or 3
+-    
+-    // Clamp current_index to valid range (in case pads were released)
+-    if (arp.current_index >= count) {
+-        arp.current_index = 0;
+-    }
+-    
+-    switch (pattern) {
+-        case ARP_UP:
+-            *pad_id = sorted[arp.current_index];
+-            *octave_offset = arp.current_octave;
+-            
+-            // Advance to next
+-            arp.current_index++;
+-            if (arp.current_index >= count) {
+-                arp.current_index = 0;
+-                arp.current_octave++;
+-                if (arp.current_octave >= max_octaves) {
+-                    arp.current_octave = 0;
+-                }
+-            }
+-            break;
+-            
+-        case ARP_DOWN:
+-            *pad_id = sorted[count - 1 - arp.current_index];
+-            *octave_offset = (max_octaves - 1) - arp.current_octave;
+-            
+-            // Advance to next
+-            arp.current_index++;
+-            if (arp.current_index >= count) {
+-                arp.current_index = 0;
+-                arp.current_octave++;
+-                if (arp.current_octave >= max_octaves) {
+-                    arp.current_octave = 0;
+-                }
+-            }
+-            break;
+-            
+-        case ARP_UP_DOWN:
+-            if (arp.direction == 1) {
+-                // Going up
+-                *pad_id = sorted[arp.current_index];
+-                *octave_offset = arp.current_octave;
+-                
+-                arp.current_index++;
+-                if (arp.current_index >= count) {
+-                    arp.current_index = 0;
+-                    arp.current_octave++;
+-                    if (arp.current_octave >= max_octaves) {
+-                        // Reached top, reverse direction
+-                        arp.direction = -1;
+-                        arp.current_octave = max_octaves - 1;
+-                        arp.current_index = count > 1 ? count - 2 : 0;  // Skip the top note (already played)
+-                    }
+-                }
+-            } else {
+-                // Going down
+-                *pad_id = sorted[arp.current_index];
+-                *octave_offset = arp.current_octave;
+-                
+-                if (arp.current_index == 0) {
+-                    if (arp.current_octave == 0) {
+-                        // Reached bottom, reverse direction
+-                        arp.direction = 1;
+-                        arp.current_index = count > 1 ? 1 : 0;  // Skip the bottom note (already played)
+-                        arp.current_octave = 0;
+-                    } else {
+-                        arp.current_octave--;
+-                        arp.current_index = count - 1;
+-                    }
+-                } else {
+-                    arp.current_index--;
+-                }
+-            }
+-            break;
+-            
+-        case ARP_RANDOM:
+-            *pad_id = sorted[rand() % count];
+-            *octave_offset = rand() % max_octaves;
+-            break;
+-            
+-        default:
+-            return false;
+-    }
+-    
++static struct {
++    uint16_t held_pads;
++    uint8_t velocity,current_note,last_pattern,last_octaves;
++    unsigned step;
++    int direction;
++    bool note_playing;
++    uint64_t last_step_us,note_on_us;
++} arp;
++static uint64_t interval_us(){uint16_t s=get_arp_speed_ms();if(s<ARP_SPEED_MIN)s=ARP_SPEED_MIN;if(s>ARP_SPEED_MAX)s=ARP_SPEED_MAX;return (uint64_t)s*1000;}
++static void stop_current_note(){if(arp.note_playing){stop_single_note(arp.current_note);looper_record_note(arp.current_note,0,false);arp.note_playing=false;}}
++void arpeggiator_init(){memset(&arp,0,sizeof(arp));arp.direction=1;arp.velocity=100;if(!get_arp_speed_ms())set_arp_speed_ms(ARP_SPEED_DEFAULT);}
++static bool next_note(uint8_t *out){
++    uint8_t notes[12];unsigned count=0;
++    for(unsigned i=0;i<12;i++)if(arp.held_pads&(1u<<i))notes[count++]=get_note_by_id(i);
++    if(!count)return false;
++    for(unsigned i=1;i<count;i++){uint8_t n=notes[i];unsigned j=i;while(j && notes[j-1]>n){notes[j]=notes[j-1];j--;}notes[j]=n;}
++    uint8_t pattern=get_arp_pattern(),octaves=get_arp_octave()+1;
++    if(octaves>3)octaves=3;
++    unsigned total=count*octaves;
++    if(pattern!=arp.last_pattern || octaves!=arp.last_octaves){arp.step=0;arp.direction=1;arp.last_pattern=pattern;arp.last_octaves=octaves;}
++    arp.step%=total;unsigned index=arp.step;
++    if(pattern==ARP_DOWN)index=total-1-arp.step;
++    else if(pattern==ARP_RANDOM)index=(unsigned)rand()%total;
++    else if(pattern!=ARP_UP && pattern!=ARP_UP_DOWN)return false;
++    unsigned note=(unsigned)notes[index%count]+12*(index/count);*out=note<=127?note:127;
++    if(pattern==ARP_UP_DOWN && total>1){
++        if(arp.step==total-1)arp.direction=-1;else if(!arp.step)arp.direction=1;
++        arp.step=(unsigned)((int)arp.step+arp.direction);
++    }else arp.step=(arp.step+1)%total;
+     return true;
+ }
+-
+-// Play the next step in the arpeggio
+-static void play_next_step() {
+-    uint8_t pad_id;
+-    uint8_t octave_offset;
+-    
+-    if (!get_next_step(&pad_id, &octave_offset)) {
+-        return;
+-    }
+-    
+-    // Stop previous note if playing
+-    if (arp.note_playing) {
+-        stop_single_note(arp.current_note);
+-        arp.note_playing = false;
+-    }
+-    
+-    // Calculate note with octave offset
+-    uint8_t base_note = get_note_by_id(pad_id);
+-    uint8_t note = base_note + (octave_offset * 12);
+-    
+-    // Ensure note is in valid MIDI range
+-    if (note > 127) note = 127;
+-    
+-    // Play the note
+-    play_single_note(note, arp.velocity);
+-    arp.current_note = note;
+-    arp.current_pad = pad_id;
+-    arp.note_playing = true;
+-    arp.note_on_time = time_us_32() / 1000;  // Convert to ms
+-
+-    // Record to looper using the actual note value
+-    looper_record_note(note, arp.velocity, true);
++static void play_next(){
++    uint8_t n;if(!next_note(&n))return;stop_current_note();
++    play_single_note(n,arp.velocity);looper_record_note(n,arp.velocity,true);
++    arp.current_note=n;arp.note_playing=true;arp.note_on_us=time_us_64();
+ }
+-
+-// Stop the current note (for gate timing)
+-static void stop_current_note() {
+-    if (arp.note_playing) {
+-        stop_single_note(arp.current_note);
+-        // Record note off with the actual note value
+-        looper_record_note(arp.current_note, 0, false);
+-        arp.note_playing = false;
+-    }
++void arpeggiator_pad_on(uint8_t id,uint8_t velocity){
++    if(id>=12 || !velocity)return;bool first=arp.held_pads==0;
++    arp.held_pads|=1u<<id;arp.velocity=velocity;
++    if(first){arp.step=0;arp.direction=1;arp.last_step_us=time_us_64();play_next();}
+ }
+-
+-void arpeggiator_init() {
+-    arp.held_pads = 0;
+-    arp.held_count = 0;
+-    arp.current_index = 0;
+-    arp.current_octave = 0;
+-    arp.direction = 1;
+-    arp.current_note = 0;
+-    arp.current_pad = 0;
+-    arp.note_playing = false;
+-    arp.last_step_time = 0;
+-    arp.note_on_time = 0;
+-    arp.velocity = 100;
+-    
+-    // Initialize default arp speed if not set
+-    if (get_arp_speed_ms() == 0) {
+-        set_arp_speed_ms(ARP_SPEED_DEFAULT);
+-    }
++void arpeggiator_pad_off(uint8_t id){if(id>=12)return;arp.held_pads&=~(1u<<id);if(!arp.held_pads)arpeggiator_stop();}
++void arpeggiator_stop(){stop_current_note();notes_release_source(NOTE_SOURCE_ARP);arp.held_pads=0;arp.step=0;arp.direction=1;}
++bool arpeggiator_is_active(){return get_arp_pattern()!=ARP_OFF && arp.held_pads!=0;}
++bool arpeggiator_is_enabled(){return get_arp_pattern()!=ARP_OFF;}
++void arpeggiator_task(){
++    if(!arpeggiator_is_enabled()){arpeggiator_stop();return;}
++    if(!arp.held_pads)return;
++    uint64_t now=time_us_64(),interval=interval_us();
++    if(arp.note_playing && now-arp.note_on_us>=interval*ARP_GATE_PERCENT/100)stop_current_note();
++    if(now-arp.last_step_us>=interval){arp.last_step_us+=((now-arp.last_step_us)/interval)*interval;play_next();}
+ }
+-
+-void arpeggiator_pad_on(uint8_t pad_id, uint8_t velocity) {
+-    if (pad_id >= 12) return;
+-    
+-    // Add pad to held set
+-    if (!(arp.held_pads & (1 << pad_id))) {
+-        arp.held_pads |= (1 << pad_id);
+-        arp.held_order[arp.held_count++] = pad_id;
+-    }
+-    
+-    // Store velocity
+-    arp.velocity = velocity;
+-    
+-    // If this is the first pad, start immediately
+-    if (arp.held_count == 1) {
+-        arp.current_index = 0;
+-        arp.current_octave = 0;
+-        arp.direction = 1;
+-        arp.last_step_time = time_us_32() / 1000;
+-        play_next_step();
+-    }
+-}
+-
+-void arpeggiator_pad_off(uint8_t pad_id) {
+-    if (pad_id >= 12) return;
+-    
+-    // Remove pad from held set
+-    if (arp.held_pads & (1 << pad_id)) {
+-        arp.held_pads &= ~(1 << pad_id);
+-        arp.held_count--;
+-        
+-        // Remove from held_order array
+-        for (uint8_t i = 0; i < 12; i++) {
+-            if (arp.held_order[i] == pad_id) {
+-                // Shift remaining elements
+-                for (uint8_t j = i; j < 11; j++) {
+-                    arp.held_order[j] = arp.held_order[j + 1];
+-                }
+-                break;
+-            }
+-        }
+-    }
+-    
+-    // If no more pads held, stop
+-    if (arp.held_count == 0) {
+-        stop_current_note();
+-        arp.current_index = 0;
+-        arp.current_octave = 0;
+-        arp.direction = 1;
+-    }
+-}
+-
+-void arpeggiator_stop() {
+-    stop_current_note();
+-    arp.held_pads = 0;
+-    arp.held_count = 0;
+-    arp.current_index = 0;
+-    arp.current_octave = 0;
+-    arp.direction = 1;
+-}
+-
+-bool arpeggiator_is_active() {
+-    return (get_arp_pattern() != ARP_OFF) && (arp.held_count > 0);
+-}
+-
+-bool arpeggiator_is_enabled() {
+-    return get_arp_pattern() != ARP_OFF;
+-}
+-
+-void arpeggiator_task() {
+-    // Only process if arpeggiator is enabled and has held pads
+-    if (get_arp_pattern() == ARP_OFF || arp.held_count == 0) {
+-        return;
+-    }
+-    
+-    uint32_t now = time_us_32() / 1000;  // Current time in ms
+-    uint32_t interval = get_interval_ms();
+-    uint32_t gate_time = (interval * ARP_GATE_PERCENT) / 100;
+-    
+-    // Check if we need to stop the current note (gate off)
+-    if (arp.note_playing && (now - arp.note_on_time >= gate_time)) {
+-        stop_current_note();
+-    }
+-    
+-    // Check if it's time for the next step
+-    if (now - arp.last_step_time >= interval) {
+-        arp.last_step_time = now;
+-        play_next_step();
+-    }
+-}
+--- pre-repair/config.h
++++ repaired/config.h
+@@ -5,7 +5,7 @@
+ 
+ /* Device identifiers */
+ #define PROGRAM_NAME                "Dodepan"
+-#define PROGRAM_VERSION             "2.5.1"
++#define PROGRAM_VERSION             "2.6.0-rc1"
+ #define PROGRAM_DESCRIPTION         "Portable musical instrument and MIDI controller"
+ #define PROGRAM_URL                 "https://turiscandurra.com/circuits"
+ #define USB_STR_MANUFACTURER        "TuriScandurra"
+@@ -110,11 +110,16 @@
+ // Clock speed options (for 48kHz audio, must be multiple of 48kHz)
+ // Try lower speeds if experiencing audio crackling on some units
+ // Options: 288000 (288MHz), 240000 (240MHz), 192000 (192MHz), 150000 (150MHz default)
++#ifndef SYSTEM_CLOCK_KHZ
+ #define SYSTEM_CLOCK_KHZ            288000  // Full overclock for best polyphony
++
++#endif
+ 
+ // Audio buffer size - larger = more latency but more tolerant of timing jitter
+ // Try 128 or 256 if experiencing ticking/crackling on some units
++#ifndef AUDIO_BUFFER_LENGTH
+ #define AUDIO_BUFFER_LENGTH         128
++#endif
+ #define SOUND_OUTPUT_FREQUENCY      48000
+ #define PICO_AUDIO_I2S_MONO_OUTPUT
+ 
+@@ -194,4 +199,29 @@
+ #define FLASH_WRITE_DELAY_S         10  // To minimize flash operations, delay writing by this amount of seconds
+ #define NUM_PRESET_SLOTS            4
+ #define NUM_SCALE_SLOTS             4
++
++
++#ifndef DODEPAN_DISABLE_DISPLAY
++#define DODEPAN_DISABLE_DISPLAY 0
++#endif
++#ifndef DODEPAN_DISABLE_IMU
++#define DODEPAN_DISABLE_IMU 0
++#endif
++#ifndef DODEPAN_DISABLE_PERSISTENCE
++#define DODEPAN_DISABLE_PERSISTENCE 0
++#endif
++#ifndef DODEPAN_UART_DIAGNOSTICS
++#define DODEPAN_UART_DIAGNOSTICS 0
++#endif
++
++#ifndef TOUCH_RELEASE_MS
++#define TOUCH_RELEASE_MS 40
++#endif
++
++#if DODEPAN_DISABLE_DISPLAY
++#undef USE_DISPLAY
++#endif
++#if DODEPAN_DISABLE_IMU
++#undef USE_IMU
++#endif
+ #endif /* CONFIG_H_ */
+--- pre-repair/demo_player.c
++++ repaired/demo_player.c
+@@ -1,448 +1,112 @@
+-/**
+- * Demo Player - Plays embedded MIDI files for Dodepan demo mode
+- * 
+- * Parses Type 0 MIDI files at runtime and dispatches note events
+- * using the same hooks as the looper for synthesizer playback.
+- */
+-
+-#include "pico/stdlib.h"
+ #include "demo_player.h"
+ #include "demo_songs.h"
++#include "note_router.h"
+ #include "display/display.h"
+-
+-// Display refresh interval during playback (200ms to reduce I2C contention)
+-#define DEMO_DISPLAY_REFRESH_MS 200
+-
+-// MIDI status bytes
+-#define MIDI_NOTE_OFF       0x80
+-#define MIDI_NOTE_ON        0x90
+-#define MIDI_POLY_PRESSURE  0xA0
+-#define MIDI_CONTROL_CHANGE 0xB0
+-#define MIDI_PROGRAM_CHANGE 0xC0
+-#define MIDI_CHAN_PRESSURE  0xD0
+-#define MIDI_PITCH_BEND     0xE0
+-#define MIDI_META_EVENT     0xFF
+-
+-// Default tempo: 120 BPM = 500000 microseconds per quarter note
+-#define DEFAULT_TEMPO_US    500000
+-
+-typedef struct {
++#include <string.h>
++#define DEFAULT_TEMPO_US 500000u
++static struct {
+     demo_state_t state;
+-    uint8_t current_song;
+-    
+-    // MIDI parsing state
++    uint8_t current_song,running_status;
+     const uint8_t *midi_data;
+-    size_t midi_size;
+-    size_t read_pos;            // Current read position in MIDI data
+-    uint16_t ticks_per_quarter; // From MIDI header (time division)
+-    uint32_t tempo_us;          // Microseconds per quarter note (from tempo meta event)
+-    
+-    // Playback timing
+-    uint64_t play_start_us;     // When playback started
+-    uint32_t current_tick;      // Current position in MIDI ticks
+-    uint32_t next_event_tick;   // Tick of next event to play
+-    uint8_t running_status;     // MIDI running status for parsing
+-    
+-    // Track info from header
+-    bool header_parsed;
+-    bool in_track;
+-    size_t track_end_pos;       // End of current track data
+-    
+-    // Duration estimate
+-    uint32_t duration_ms;
+-    
+-    // Display throttle
+-    uint32_t last_display_ms;
+-} demo_player_t;
+-
+-static demo_player_t demo;
+-
+-// Forward declarations
+-static bool parse_midi_header(void);
+-static bool read_next_event(void);
+-static uint32_t read_variable_length(void);
+-static void dispatch_midi_event(uint8_t status, uint8_t data1, uint8_t data2);
+-static uint32_t ticks_to_ms(uint32_t ticks);
+-static uint32_t ms_to_ticks(uint32_t ms);
+-
+-void demo_init(void) {
+-    demo.state = DEMO_STOPPED;
+-    demo.current_song = 0;
+-    demo.midi_data = NULL;
+-    demo.midi_size = 0;
+-    demo.tempo_us = DEFAULT_TEMPO_US;
+-    demo.ticks_per_quarter = 480;  // Common default
+-    demo.duration_ms = 0;
++    size_t midi_size,read_pos,track_end_pos;
++    uint16_t ticks_per_quarter;
++    uint32_t tempo_us,duration_ms;
++    uint64_t current_tick,next_event_tick,play_start_us,next_event_us,remainder,last_display_us;
++    bool in_track,parse_error;
++} demo;
++static uint32_t be32(const uint8_t *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
++static bool parse_midi_header(void){
++    const uint8_t *d=demo.midi_data;
++    if(demo.midi_size<22 || memcmp(d,"MThd",4))return false;
++    uint32_t length=be32(d+4);
++    if(length<6 || length>demo.midi_size-16 || d[8] || d[9] || d[10] || d[11]!=1)return false;
++    uint16_t division=((uint16_t)d[12]<<8)|d[13];if(!division || division&0x8000)return false;
++    demo.ticks_per_quarter=division;demo.read_pos=8+length;
++    d=demo.midi_data+demo.read_pos;if(memcmp(d,"MTrk",4))return false;
++    uint32_t track_length=be32(d+4);demo.read_pos+=8;
++    if(track_length>demo.midi_size-demo.read_pos)return false;
++    demo.track_end_pos=demo.read_pos+track_length;demo.in_track=true;
++    demo.next_event_us=demo.remainder=demo.current_tick=demo.next_event_tick=0;
++    return true;
+ }
+-
+-uint8_t demo_get_song_count(void) {
+-    return DEMO_SONG_COUNT;
++static uint32_t read_variable_length(void){
++    uint32_t value=0;
++    for(unsigned i=0;i<4;i++){
++        if(demo.read_pos>=demo.track_end_pos){demo.parse_error=true;return 0;}
++        uint8_t b=demo.midi_data[demo.read_pos++];value=(value<<7)|(b&127);
++        if(!(b&128))return value;
++    }
++    demo.parse_error=true;return 0;
+ }
+-
+-const char* demo_get_song_name(uint8_t index) {
+-    if (index >= DEMO_SONG_COUNT) {
+-        return "???";
+-    }
+-    return demo_songs[index].name;
++static bool read_next_event(void){
++    if(!demo.in_track || demo.read_pos>=demo.track_end_pos)return false;
++    uint32_t delta=read_variable_length();if(demo.parse_error)return false;
++    demo.next_event_tick=demo.current_tick+delta;
++    uint64_t numerator=(uint64_t)delta*demo.tempo_us+demo.remainder;
++    demo.next_event_us+=numerator/demo.ticks_per_quarter;demo.remainder=numerator%demo.ticks_per_quarter;
++    uint64_t duration=demo.next_event_us/1000;demo.duration_ms=duration>UINT32_MAX?UINT32_MAX:(uint32_t)duration;
++    return demo.read_pos<demo.track_end_pos;
+ }
+-
+-uint8_t demo_get_current_song(void) {
+-    return demo.current_song;
+-}
+-
+-void demo_select_song(uint8_t index) {
+-    if (index >= DEMO_SONG_COUNT) {
+-        index = 0;
+-    }
+-    demo.current_song = index;
+-}
+-
+-void demo_next_song(void) {
+-    demo.current_song++;
+-    if (demo.current_song >= DEMO_SONG_COUNT) {
+-        demo.current_song = 0;
++static void dispatch_midi_event(uint8_t status,uint8_t a,uint8_t b){
++    switch(status&0xf0){
++    case 0x80:notes_off(NOTE_SOURCE_DEMO,a);break;
++    case 0x90:notes_on(NOTE_SOURCE_DEMO,a,b);break;
++    case 0xb0:notes_control(NOTE_SOURCE_DEMO,a,b);break;
++    case 0xe0:looper_send_pitch((int16_t)(((uint16_t)b<<7)|a)-8192);break;
++    default:break;
+     }
+ }
+-
+-void demo_prev_song(void) {
+-    if (demo.current_song == 0) {
+-        demo.current_song = DEMO_SONG_COUNT - 1;
+-    } else {
+-        demo.current_song--;
++static bool process_and_advance(void){
++    if(demo.read_pos>=demo.track_end_pos)return false;
++    uint8_t status=demo.midi_data[demo.read_pos];
++    if(status&0x80){demo.read_pos++;if(status<0xf0)demo.running_status=status;}
++    else {status=demo.running_status;if(status<0x80 || status>=0xf0)return false;}
++    if(status==0xff){
++        if(demo.read_pos>=demo.track_end_pos)return false;
++        uint8_t type=demo.midi_data[demo.read_pos++];uint32_t length=read_variable_length();
++        if(demo.parse_error || length>demo.track_end_pos-demo.read_pos)return false;
++        if(type==0x51){
++            if(length!=3)return false;const uint8_t *d=demo.midi_data+demo.read_pos;
++            uint32_t tempo=((uint32_t)d[0]<<16)|((uint32_t)d[1]<<8)|d[2];if(!tempo)return false;
++            demo.tempo_us=tempo;
++        }
++        if(type==0x2f)return false;
++        demo.read_pos+=length;
++    }else if(status==0xf0 || status==0xf7){
++        demo.running_status=0;uint32_t length=read_variable_length();
++        if(demo.parse_error || length>demo.track_end_pos-demo.read_pos)return false;
++        demo.read_pos+=length;
++    }else{
++        if(status>=0xf0)return false;
++        unsigned bytes=(status&0xf0)==0xc0 || (status&0xf0)==0xd0?1:2;
++        if(bytes>demo.track_end_pos-demo.read_pos)return false;
++        uint8_t a=demo.midi_data[demo.read_pos++],b=bytes==2?demo.midi_data[demo.read_pos++]:0;
++        if(a>=128 || b>=128)return false;
++        dispatch_midi_event(status,a,b);
+     }
++    demo.current_tick=demo.next_event_tick;return read_next_event();
+ }
+-
+-void demo_start(void) {
+-    if (DEMO_SONG_COUNT == 0) {
+-        return;
+-    }
+-    
+-    // Stop any playing notes first
+-    all_notes_off();
+-    
+-    // Set up MIDI data pointer
+-    const demo_song_t *song = &demo_songs[demo.current_song];
+-    demo.midi_data = song->data;
+-    demo.midi_size = song->size;
+-    demo.read_pos = 0;
+-    
+-    // Reset parsing state
+-    demo.header_parsed = false;
+-    demo.in_track = false;
+-    demo.running_status = 0;
+-    demo.tempo_us = DEFAULT_TEMPO_US;
+-    demo.current_tick = 0;
+-    demo.next_event_tick = 0;
+-    demo.last_display_ms = 0;
+-    
+-    // Parse the MIDI header
+-    if (!parse_midi_header()) {
+-        return;
+-    }
+-    
+-    // Read first event to get its tick
+-    if (!read_next_event()) {
+-        return;
+-    }
+-    
+-    // Start playback
+-    demo.play_start_us = time_us_64();
+-    demo.state = DEMO_PLAYING;
++void demo_init(){memset(&demo,0,sizeof(demo));demo.tempo_us=DEFAULT_TEMPO_US;demo.ticks_per_quarter=480;}
++uint8_t demo_get_song_count(){return DEMO_SONG_COUNT;}
++const char *demo_get_song_name(uint8_t i){return i<DEMO_SONG_COUNT?demo_songs[i].name:"???";}
++uint8_t demo_get_current_song(){return demo.current_song;}
++void demo_stop(){notes_release_source(NOTE_SOURCE_DEMO);demo.state=DEMO_STOPPED;display_request_refresh();}
++void demo_select_song(uint8_t i){demo_stop();demo.current_song=i<DEMO_SONG_COUNT?i:0;}
++void demo_next_song(){demo_select_song((demo.current_song+1)%DEMO_SONG_COUNT);}
++void demo_prev_song(){demo_select_song((demo.current_song+DEMO_SONG_COUNT-1)%DEMO_SONG_COUNT);}
++void demo_start(){
++    uint8_t selected=demo.current_song;demo_stop();demo_init();demo.current_song=selected;
++    const demo_song_t *song=&demo_songs[selected];demo.midi_data=song->data;demo.midi_size=song->size;
++    if(!parse_midi_header() || !read_next_event())return;
++    demo.play_start_us=time_us_64();demo.state=DEMO_PLAYING;display_request_refresh();
+ }
+-
+-void demo_stop(void) {
+-    if (demo.state == DEMO_PLAYING) {
+-        all_notes_off();
+-    }
+-    demo.state = DEMO_STOPPED;
++bool demo_is_playing(){return demo.state==DEMO_PLAYING;}
++demo_state_t demo_get_state(){return demo.state;}
++uint32_t demo_get_elapsed_ms(){return demo_is_playing()?(uint32_t)((time_us_64()-demo.play_start_us)/1000):0;}
++uint32_t demo_get_duration_ms(){return demo.duration_ms;}
++void demo_task(){
++    if(!demo_is_playing())return;uint64_t now=time_us_64(),elapsed=now-demo.play_start_us;
++    /* Bound event work so a dense zero-delta asset cannot starve touch/USB. */
++    for(unsigned n=0;n<32 && demo.next_event_us<=elapsed;n++)if(!process_and_advance()){demo_stop();return;}
++    if(now-demo.last_display_us>=200000){demo.last_display_us=now;display_request_refresh();}
+ }
+-
+-bool demo_is_playing(void) {
+-    return demo.state == DEMO_PLAYING;
+-}
+-
+-demo_state_t demo_get_state(void) {
+-    return demo.state;
+-}
+-
+-uint32_t demo_get_elapsed_ms(void) {
+-    if (demo.state != DEMO_PLAYING) {
+-        return 0;
+-    }
+-    return (uint32_t)((time_us_64() - demo.play_start_us) / 1000);
+-}
+-
+-uint32_t demo_get_duration_ms(void) {
+-    return demo.duration_ms;
+-}
+-
+-/**
+- * Parse MIDI file header (MThd chunk) and prepare for track reading.
+- */
+-static bool parse_midi_header(void) {
+-    if (demo.midi_size < 14) {
+-        return false;
+-    }
+-    
+-    const uint8_t *d = demo.midi_data;
+-    
+-    // Check header chunk "MThd"
+-    if (d[0] != 'M' || d[1] != 'T' || d[2] != 'h' || d[3] != 'd') {
+-        return false;
+-    }
+-    
+-    // Header length (should be 6)
+-    uint32_t header_len = (d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7];
+-    if (header_len < 6) {
+-        return false;
+-    }
+-    
+-    // Format type (0 = single track, 1 = multi-track, we expect 0 after conversion)
+-    uint16_t format = (d[8] << 8) | d[9];
+-    (void)format;  // We handle any format since tracks are merged
+-    
+-    // Number of tracks
+-    uint16_t num_tracks = (d[10] << 8) | d[11];
+-    (void)num_tracks;
+-    
+-    // Time division (ticks per quarter note)
+-    uint16_t time_div = (d[12] << 8) | d[13];
+-    if (time_div & 0x8000) {
+-        // SMPTE format - not supported
+-        return false;
+-    }
+-    demo.ticks_per_quarter = time_div;
+-    
+-    // Move to first track chunk
+-    demo.read_pos = 8 + header_len;
+-    demo.header_parsed = true;
+-    
+-    // Find and enter the track
+-    if (demo.read_pos + 8 > demo.midi_size) {
+-        return false;
+-    }
+-    
+-    d = demo.midi_data + demo.read_pos;
+-    if (d[0] != 'M' || d[1] != 'T' || d[2] != 'r' || d[3] != 'k') {
+-        return false;
+-    }
+-    
+-    uint32_t track_len = (d[4] << 24) | (d[5] << 16) | (d[6] << 8) | d[7];
+-    demo.read_pos += 8;  // Skip track header
+-    demo.track_end_pos = demo.read_pos + track_len;
+-    
+-    // Bounds check: ensure track doesn't exceed file size
+-    if (demo.track_end_pos > demo.midi_size) {
+-        return false;
+-    }
+-    demo.in_track = true;
+-    
+-    // Duration will be estimated as playback progresses
+-    demo.duration_ms = 0;
+-    
+-    return true;
+-}
+-
+-/**
+- * Read a variable-length quantity from current position.
+- */
+-static uint32_t read_variable_length(void) {
+-    uint32_t value = 0;
+-    uint8_t byte;
+-    
+-    do {
+-        if (demo.read_pos >= demo.midi_size) {
+-            return 0;
+-        }
+-        byte = demo.midi_data[demo.read_pos++];
+-        value = (value << 7) | (byte & 0x7F);
+-    } while (byte & 0x80);
+-    
+-    return value;
+-}
+-
+-/**
+- * Read and queue the next MIDI event.
+- * Returns false if end of track reached.
+- */
+-static bool read_next_event(void) {
+-    if (!demo.in_track || demo.read_pos >= demo.track_end_pos) {
+-        return false;
+-    }
+-    
+-    // Read delta time and add to current tick for next event
+-    uint32_t delta = read_variable_length();
+-    demo.next_event_tick = demo.current_tick + delta;
+-    
+-    return true;
+-}
+-
+-/**
+- * Process the current event at read_pos and dispatch it.
+- * Then advance to read the next delta time.
+- */
+-static bool process_and_advance(void) {
+-    if (demo.read_pos >= demo.track_end_pos) {
+-        return false;
+-    }
+-    
+-    uint8_t status = demo.midi_data[demo.read_pos];
+-    
+-    // Handle running status
+-    if (status & 0x80) {
+-        demo.running_status = status;
+-        demo.read_pos++;
+-    } else {
+-        status = demo.running_status;
+-    }
+-    
+-    if (status == MIDI_META_EVENT) {
+-        // Meta event
+-        if (demo.read_pos >= demo.track_end_pos) return false;
+-        uint8_t meta_type = demo.midi_data[demo.read_pos++];
+-        uint32_t length = read_variable_length();
+-        
+-        if (meta_type == 0x51 && length == 3) {
+-            // Tempo change
+-            const uint8_t *d = demo.midi_data + demo.read_pos;
+-            demo.tempo_us = (d[0] << 16) | (d[1] << 8) | d[2];
+-        } else if (meta_type == 0x2F) {
+-            // End of track
+-            demo.read_pos += length;
+-            return false;
+-        }
+-        
+-        demo.read_pos += length;
+-    } else if ((status & 0xF0) == 0xF0) {
+-        // System message (skip)
+-        if (status == 0xF0 || status == 0xF7) {
+-            // SysEx
+-            uint32_t length = read_variable_length();
+-            demo.read_pos += length;
+-        }
+-    } else {
+-        // Channel message
+-        uint8_t msg_type = status & 0xF0;
+-        uint8_t data1 = 0, data2 = 0;
+-        
+-        if (demo.read_pos < demo.track_end_pos) {
+-            data1 = demo.midi_data[demo.read_pos++];
+-        }
+-        
+-        // Two-byte messages
+-        if (msg_type == MIDI_NOTE_OFF || msg_type == MIDI_NOTE_ON ||
+-            msg_type == MIDI_POLY_PRESSURE || msg_type == MIDI_CONTROL_CHANGE ||
+-            msg_type == MIDI_PITCH_BEND) {
+-            if (demo.read_pos < demo.track_end_pos) {
+-                data2 = demo.midi_data[demo.read_pos++];
+-            }
+-        }
+-        
+-        dispatch_midi_event(status, data1, data2);
+-    }
+-    
+-    // Update current tick position
+-    demo.current_tick = demo.next_event_tick;
+-    
+-    // Read next delta time
+-    return read_next_event();
+-}
+-
+-/**
+- * Dispatch a MIDI channel message to the synth.
+- */
+-static void dispatch_midi_event(uint8_t status, uint8_t data1, uint8_t data2) {
+-    uint8_t msg_type = status & 0xF0;
+-    // uint8_t channel = status & 0x0F;  // Not used - we play all channels
+-    
+-    switch (msg_type) {
+-        case MIDI_NOTE_ON:
+-            if (data2 > 0) {
+-                looper_send_note_on(data1, data2);
+-            } else {
+-                // Note On with velocity 0 = Note Off
+-                looper_send_note_off(data1);
+-            }
+-            break;
+-            
+-        case MIDI_NOTE_OFF:
+-            looper_send_note_off(data1);
+-            break;
+-            
+-        case MIDI_CONTROL_CHANGE:
+-            looper_send_cc(data1, data2);
+-            break;
+-            
+-        case MIDI_PITCH_BEND: {
+-            // Convert 14-bit value to signed pitch bend
+-            int16_t bend = ((data2 << 7) | data1) - 8192;
+-            looper_send_pitch(bend);
+-            break;
+-        }
+-        
+-        default:
+-            // Ignore other message types
+-            break;
+-    }
+-}
+-
+-/**
+- * Convert MIDI ticks to milliseconds based on current tempo.
+- */
+-static uint32_t ticks_to_ms(uint32_t ticks) {
+-    // ms = ticks * (tempo_us / ticks_per_quarter) / 1000
+-    // To avoid overflow: ms = ticks * tempo_us / (ticks_per_quarter * 1000)
+-    uint64_t us = (uint64_t)ticks * demo.tempo_us / demo.ticks_per_quarter;
+-    return (uint32_t)(us / 1000);
+-}
+-
+-/**
+- * Convert milliseconds to MIDI ticks based on current tempo.
+- */
+-static uint32_t ms_to_ticks(uint32_t ms) {
+-    // Guard against division by zero from corrupted MIDI data
+-    if (demo.tempo_us == 0 || demo.ticks_per_quarter == 0) {
+-        return 0;
+-    }
+-    // ticks = ms * 1000 * ticks_per_quarter / tempo_us
+-    uint64_t us = (uint64_t)ms * 1000;
+-    return (uint32_t)(us * demo.ticks_per_quarter / demo.tempo_us);
+-}
+-
+-/**
+- * Main playback task - call from main loop.
+- */
+-void demo_task(void) {
+-    if (demo.state != DEMO_PLAYING) {
+-        return;
+-    }
+-    
+-    // Calculate elapsed time and convert to ticks
+-    uint64_t now_us = time_us_64();
+-    uint32_t elapsed_ms = (uint32_t)((now_us - demo.play_start_us) / 1000);
+-    uint32_t elapsed_ticks = ms_to_ticks(elapsed_ms);
+-    
+-    // Process all events that should have played by now
+-    while (demo.next_event_tick <= elapsed_ticks) {
+-        if (!process_and_advance()) {
+-            // End of song - stop playback
+-            demo_stop();
+-            return;
+-        }
+-    }
+-    
+-    // Update duration estimate based on where we are
+-    uint32_t current_duration = ticks_to_ms(demo.next_event_tick);
+-    if (current_duration > demo.duration_ms) {
+-        demo.duration_ms = current_duration;
+-    }
+-    
+-#ifndef DEBUG_DEMO_NO_DISPLAY
+-    // Throttled display refresh
+-    uint32_t now_ms = time_us_32() / 1000;
+-    if ((now_ms - demo.last_display_ms) >= DEMO_DISPLAY_REFRESH_MS) {
+-        display_request_refresh();
+-        demo.last_display_ms = now_ms;
+-    }
+-#endif
+-}
+--- pre-repair/display/display.c
++++ repaired/display/display.c
+@@ -689,6 +689,7 @@
+ }
+ 
+ void display_draw(ssd1306_t *p) {
++    if(DODEPAN_DISABLE_DISPLAY)return;
+     // Rate limit: skip if called too soon after last update
+     uint32_t now = time_us_32();
+     if ((now - last_display_update_time) < DISPLAY_MIN_REFRESH_INTERVAL_US) {
+@@ -786,6 +787,9 @@
+         break;
+     }
+ 
++    extern bool settings_save_pending(void);
++    if(settings_save_pending())ssd1306_draw_string(p,120,0,1,"*");
++    if(looper_recording_limited() && context==CTX_LOOPER)ssd1306_draw_string(p,96,24,1,"Full");
+     ssd1306_show(p);
+     i2c1_mutex_exit();
+ }
+--- pre-repair/imu.c
++++ repaired/imu.c
+@@ -5,6 +5,7 @@
+ #include "MPU6050.h"
+ #include <config.h>
+ #include "imu.h"
++#include "sensor_math.h"
+ #include "i2c_mutex.h"
+ 
+ mpu6050_t mpu6050;
+@@ -66,20 +67,6 @@
+     return state->peak;
+ }
+ 
+-inline int16_t mul_fixed(int16_t a, int16_t b) {
+-    return (a * b) >> FIXED_POINT_BITS;
+-}
+-
+-inline int16_t sqrt_fixed(int16_t x) {
+-    int16_t y = x;
+-    int32_t e = FIXED_POINT_SCALE;
+-    while (e > 1) {
+-        e >>= 1;
+-        y = (y + mul_fixed(x, FIXED_POINT_SCALE / y)) >> 1;
+-    }
+-    return y;
+-}
+-
+ void imu_init(){
+     mpu6050 = mpu6050_init(MPU6050_I2C_PORT, MPU6050_ADDRESS);
+ 
+@@ -100,7 +87,7 @@
+ }
+ 
+ // Overriding rpi-pico-mpu6050 library methods for minimal, fixed-point calculations
+-void read_raw_accel_fixed(struct mpu6050 *self) {
++bool read_raw_accel_fixed(struct mpu6050 *self) {
+     struct i2c_information *i2c = &self->i2c;
+     uint8_t data[6];
+ 
+@@ -110,12 +97,13 @@
+ 
+     // Read raw accelerometer data
+     uint8_t reg = 0x3B; // ACCEL_XOUT_H
+-    i2c_write_timeout_us(i2c->instance, i2c->address, &reg, 1, true, 3000);
+-    i2c_read_timeout_us(i2c->instance, i2c->address, data, 6, false, 3000);
++    if(i2c_write_timeout_us(i2c->instance, i2c->address, &reg, 1, true, 3000)!=1 ||
++       i2c_read_timeout_us(i2c->instance, i2c->address, data, 6, false, 3000)!=6)return false;
+ 
+     self->ra.x = data[0] << 8 | data[1];
+     self->ra.y = data[2] << 8 | data[3];
+     self->ra.z = data[4] << 8 | data[5];
++    return true;
+ }
+ 
+ int16_t abs_fixed(int16_t x) {
+@@ -135,8 +123,14 @@
+ void imu_task(Imu_data * data) {
+     // Acquire I2C lock before reading IMU data
+     i2c1_mutex_enter();
+-    read_raw_accel_fixed(&mpu6050);
++    bool valid=read_raw_accel_fixed(&mpu6050);
+     i2c1_mutex_exit();
++    static uint64_t last_good_us;
++    if(!valid){
++        if(time_us_64()-last_good_us>=250000){data->available=false;data->deviation_x=8192;data->deviation_y=64;data->acceleration=100;data->tilt_zone=4;}
++        return;
++    }
++    last_good_us=time_us_64();data->available=true;
+     
+     struct mpu6050_vector16 *accel = &mpu6050.ra;
+ 
+@@ -147,9 +141,7 @@
+     int16_t az = (accel->z * 493) / FIXED_POINT_SCALE;
+ 
+     // Calculate the total motion acceleration (which is not linear since we have not accounted for gravity)
+-    int16_t tot_accel = sqrt_fixed(mul_fixed(accel->x, accel->x) +
+-                               mul_fixed(accel->y, accel->y) +
+-                               mul_fixed(accel->z, accel->z));
++    int16_t tot_accel = (int16_t)sensor_magnitude(accel->x,accel->y,accel->z);
+ 
+     static int16_t prev_tot_accel;
+     int16_t delta_accel = abs_fixed(prev_tot_accel - tot_accel);
+--- pre-repair/imu.h
++++ repaired/imu.h
+@@ -8,6 +8,7 @@
+ 
+ // Accelerometer/gyroscope data structure for Dodepan
+ typedef struct {
++    bool available;
+     uint8_t acceleration; // Also used to calculate velocity for Midi
+     uint16_t deviation_x;
+     uint8_t deviation_y;
+--- pre-repair/instrument_preset.h
++++ repaired/instrument_preset.h
+@@ -2,7 +2,9 @@
+ #define INSTRUMENT_PRESET_H
+ 
+ #include "pra32-u2-constants.h"
+-#define PROGRAM_PARAMS_NUM 45
++#define PROGRAM_PARAMS_NUM 48
++#define USER_INSTRUMENT_BASE 14
++#define INSTRUMENT_COUNT 18
+ 
+ const uint8_t dodepan_program_parameters[] = {
+     OSC_1_WAVE     ,
+@@ -486,4 +488,17 @@
+       1, // DELAY_MODE - Ping pong for bounce
+ };
+ 
++#ifdef __cplusplus
++static_assert(sizeof(dodepan_program_parameters)==PROGRAM_PARAMS_NUM,"Preset parameter count");
++static_assert(sizeof(dodepan_preset)==PROGRAM_PARAMS_NUM,"Dodepan preset count");
++#else
++_Static_assert(sizeof(dodepan_program_parameters)==PROGRAM_PARAMS_NUM,"Preset parameter count");
++#endif
++#ifdef __cplusplus
++static_assert(sizeof(magic_bell_preset)==PROGRAM_PARAMS_NUM, "Magic Bell parameter count");
++static_assert(sizeof(space_piano_preset)==PROGRAM_PARAMS_NUM, "Space Piano parameter count");
++static_assert(sizeof(robot_voice_preset)==PROGRAM_PARAMS_NUM, "Robot Voice parameter count");
++static_assert(sizeof(synthwave_preset)==PROGRAM_PARAMS_NUM, "Synthwave parameter count");
++static_assert(sizeof(bleep_bloop_preset)==PROGRAM_PARAMS_NUM, "Bleep Bloop parameter count");
++#endif
+ #endif--- pre-repair/lib/sound_i2s/sound_i2s.c
++++ repaired/lib/sound_i2s/sound_i2s.c
+@@ -1,98 +1,156 @@
+-/* sound_i2s.c */
+-
+-#include <stdlib.h>
+ #include <string.h>
+ #include "pico/stdlib.h"
+-#include "hardware/gpio.h"
++#include "pico/critical_section.h"
++#include "hardware/clocks.h"
+ #include "hardware/pio.h"
+ #include "hardware/dma.h"
+ #include "hardware/irq.h"
+-
+ #include "sound_i2s.h"
++#include "audio_buffers.h"
+ #include "sound_i2s_16bits.pio.h"
+ 
+-volatile unsigned int sound_i2s_num_buffers_played = 0;
++#define MAX_AUDIO_FRAMES 256
++static uint32_t buffers[AUDIO_POOL_COUNT][MAX_AUDIO_FRAMES];
++static const uint32_t silence[MAX_AUDIO_FRAMES];
++static const uintptr_t silence_address=(uintptr_t)silence;
++/* Written by IRQ and cleared by DMA. Single aligned word publication. */
++static volatile uintptr_t next_address;
++static audio_pool_t pool;
++static struct sound_i2s_config config;
++static audio_diagnostics_t diagnostics;
++static critical_section_t lock;
++static PIO pio;
++static int sm=-1, data_chan=-1, select_chan=-1, clear_chan=-1;
++static uint program_offset;
++static uint64_t last_irq_us;
++static bool initialized;
+ 
+-static struct sound_i2s_config config;
+-static PIO sound_pio;
+-static uint sound_pio_sm;
+-static uint sound_dma_chan;
+-
+-static volatile int sound_cur_buffer_num;
+-static void *sound_sample_buffers[2];
+-
+-static void __isr __time_critical_func(dma_handler)(void)
+-{
+-  // swap buffers
+-  uint cur_buf = !sound_cur_buffer_num;
+-  sound_cur_buffer_num = cur_buf;
+-  sound_i2s_num_buffers_played++;
+-
+-  // set dma dest to new buffer and re-trigger dma:
+-  dma_hw->ch[sound_dma_chan].al3_read_addr_trig = (uintptr_t) sound_sample_buffers[cur_buf];
+-
+-  // ack dma irq
+-  dma_hw->ints0 = 1u << sound_dma_chan;
++static int buffer_at(uintptr_t address, bool advancing) {
++    for(int i=0;i<AUDIO_POOL_COUNT;i++)if(address==(uintptr_t)buffers[i])return i;
++    for(int i=0;i<AUDIO_POOL_COUNT;i++) {
++        uintptr_t start=(uintptr_t)buffers[i];
++        if(address==start || (advancing && address>start && address<=start+config.samples_per_buffer*4u)) return i;
++    }
++    return AUDIO_NO_BUFFER;
++}
++static void __isr __time_critical_func(audio_dma_irq)(void) {
++    uint32_t mask=1u<<clear_chan;
++    if(!(dma_hw->ints0&mask))return;
++    dma_hw->ints0=mask;
++    critical_section_enter_blocking(&lock);
++    if(!diagnostics.running){critical_section_exit(&lock);return;}
++    uint64_t now=time_us_64();
++    uint32_t gap=last_irq_us?(uint32_t)(now-last_irq_us):0;
++    if(gap>diagnostics.max_irq_gap_us)diagnostics.max_irq_gap_us=gap;
++    if(gap>diagnostics.buffer_period_us*3u/2u)diagnostics.irq_deadline_misses++;
++    last_irq_us=now;
++    /* Read pending first: select DMA writes data.read_addr BEFORE clearing
++       next_address. This order conservatively retains every live reference.
++       Only this highest-priority core-1 IRQ publishes DMA addresses. */
++    uintptr_t pending=next_address;
++    __dmb();
++    uintptr_t current=dma_hw->ch[data_chan].read_addr;
++    audio_pool_reclaim(&pool,buffer_at(current,true),buffer_at(pending,false));
++    diagnostics.dma_notifications++;
++    if(gap)diagnostics.observed_frames+=config.samples_per_buffer;
++    if(buffer_at(current,true)<0)diagnostics.underruns++;
++    if(next_address==silence_address) {
++        int next=audio_pool_take_ready(&pool);
++        if(next>=0){__dmb();next_address=(uintptr_t)buffers[next];}
++    }
++    critical_section_exit(&lock);
+ }
+ 
+-int sound_i2s_init(const struct sound_i2s_config *cfg)
+-{
+-  config = *cfg;
+-
+-  // allocate sound buffers
+-  size_t sound_buffer_size = 4 * config.samples_per_buffer;
+-  sound_sample_buffers[0] = malloc(sound_buffer_size);
+-  sound_sample_buffers[1] = malloc(sound_buffer_size);
+-  if (! sound_sample_buffers[0] || ! sound_sample_buffers[1]) {
+-    free(sound_sample_buffers[0]);
+-    free(sound_sample_buffers[1]);
+-    return -1;
+-  }
+-  memset(sound_sample_buffers[0], 0, sound_buffer_size);
+-  memset(sound_sample_buffers[1], 0, sound_buffer_size);
+-
+-  // setup pio
+-  sound_pio = (config.pio_num == 0) ? pio0 : pio1;
+-  uint offset = pio_add_program(sound_pio, &sound_i2s_16bits_program);
+-  sound_pio_sm = pio_claim_unused_sm(sound_pio, true);
+-  sound_i2s_16bits_program_init(sound_pio, sound_pio_sm, offset, config.sample_rate, config.pin_sda, config.pin_scl);
+-
+-  // allocate dma channel and setup irq
+-  sound_dma_chan = dma_claim_unused_channel(true);
+-  dma_channel_set_irq0_enabled(sound_dma_chan, true);
+-  irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
+-  irq_set_priority(DMA_IRQ_0, 0xff);
+-  irq_set_enabled(DMA_IRQ_0, true);
+-
+-  // reset buffer
+-  sound_i2s_num_buffers_played = 0;
+-  sound_cur_buffer_num = 0;
+-  void *buffer = sound_sample_buffers[sound_cur_buffer_num];
+-
+-  // start pio
+-  pio_sm_set_enabled(sound_pio, sound_pio_sm, true);
+-
+-  // setup dma channel
+-  dma_channel_config dma_cfg = dma_channel_get_default_config(sound_dma_chan);
+-  channel_config_set_transfer_data_size(&dma_cfg, DMA_SIZE_32);
+-  channel_config_set_read_increment(&dma_cfg, true);
+-  channel_config_set_write_increment(&dma_cfg, false);
+-  channel_config_set_dreq(&dma_cfg, pio_get_dreq(sound_pio, sound_pio_sm, true));
+-  dma_channel_configure(sound_dma_chan, &dma_cfg,
+-                        &sound_pio->txf[sound_pio_sm],  // destination
+-                        buffer,                         // source
+-                        config.samples_per_buffer,   // number of dma transfers
+-                        true                            // start immediatelly (will be blocked by pio)
+-                        );
+-  return 0;
++int sound_i2s_init(const struct sound_i2s_config *cfg) {
++    if(initialized || !cfg || !cfg->sample_rate || !cfg->samples_per_buffer || cfg->samples_per_buffer>MAX_AUDIO_FRAMES || cfg->bits_per_sample!=16)return -1;
++    config=*cfg;pio=cfg->pio_num?pio1:pio0;
++    sm=pio_claim_unused_sm(pio,false);
++    data_chan=dma_claim_unused_channel(false);
++    select_chan=dma_claim_unused_channel(false);
++    clear_chan=dma_claim_unused_channel(false);
++    if(sm<0 || data_chan<0 || select_chan<0 || clear_chan<0 || !pio_can_add_program(pio,&sound_i2s_16bits_program)) {
++        if(sm>=0)pio_sm_unclaim(pio,sm);
++        if(data_chan>=0)dma_channel_unclaim(data_chan);
++        if(select_chan>=0)dma_channel_unclaim(select_chan);
++        if(clear_chan>=0)dma_channel_unclaim(clear_chan);
++        return -1;
++    }
++    critical_section_init(&lock);
++    program_offset=pio_add_program(pio,&sound_i2s_16bits_program);
++    sound_i2s_16bits_program_init(pio,sm,program_offset,cfg->sample_rate,cfg->pin_sda,cfg->pin_scl);
++    diagnostics.system_clock_hz=clock_get_hz(clk_sys);
++    uint32_t raw=pio->sm[sm].clkdiv;
++    uint32_t divisor256=(raw>>16)*256+((raw>>8)&255);
++    diagnostics.frame_rate_millihz=(uint32_t)(((uint64_t)clock_get_hz(clk_sys)*256*1000)/(divisor256*64u));
++    diagnostics.buffer_period_us=(uint32_t)(((uint64_t)cfg->samples_per_buffer*1000000000)/diagnostics.frame_rate_millihz);
++    irq_set_exclusive_handler(DMA_IRQ_0,audio_dma_irq);
++    irq_set_priority(DMA_IRQ_0,0);
++    dma_channel_set_irq0_enabled(clear_chan,true);
++    irq_set_enabled(DMA_IRQ_0,true);
++    initialized=true;return 0;
+ }
+-
+-int16_t *sound_i2s_get_next_buffer()
+-{
+-  return sound_sample_buffers[1-sound_cur_buffer_num];
++bool audio_acquire_buffer(audio_buffer_t *b) {
++    critical_section_enter_blocking(&lock);
++    b->id=audio_pool_acquire(&pool,&b->generation);
++    b->samples=b->id>=0?(int16_t*)buffers[b->id]:NULL;
++    critical_section_exit(&lock);return b->id>=0;
+ }
+-
+-int16_t *sound_i2s_get_buffer(int buffer_num)
+-{
+-  return sound_sample_buffers[buffer_num];
++bool audio_publish_buffer(audio_buffer_t *b,uint32_t render_us) {
++    critical_section_enter_blocking(&lock);
++    if(render_us>diagnostics.max_render_us)diagnostics.max_render_us=render_us;
++    bool ok=audio_pool_publish(&pool,b->id,b->generation);
++    if(!ok || render_us>diagnostics.buffer_period_us)diagnostics.late_publications++;
++    __dmb();critical_section_exit(&lock);b->samples=NULL;return ok;
+ }
++bool audio_start(void) {
++    critical_section_enter_blocking(&lock);
++    if(diagnostics.running){critical_section_exit(&lock);return false;}
++    int first=audio_pool_take_ready(&pool);
++    if(first<0){critical_section_exit(&lock);return false;}
++    next_address=(uintptr_t)buffers[first];
++    /* data -> select -> clear -> data. The selected descriptor is reset to
++       immutable silence in hardware BEFORE data starts, even if IRQs are late.
++       No DMA ever repeats a consumed sample buffer by default. */
++    dma_channel_config d=dma_channel_get_default_config(data_chan);
++    channel_config_set_transfer_data_size(&d,DMA_SIZE_32);
++    channel_config_set_read_increment(&d,true);
++    channel_config_set_dreq(&d,pio_get_dreq(pio,sm,true));
++    channel_config_set_chain_to(&d,select_chan);
++    dma_channel_configure(data_chan,&d,&pio->txf[sm],silence,config.samples_per_buffer,false);
++    d=dma_channel_get_default_config(select_chan);
++    channel_config_set_transfer_data_size(&d,DMA_SIZE_32);
++    channel_config_set_read_increment(&d,false);channel_config_set_write_increment(&d,false);
++    channel_config_set_chain_to(&d,clear_chan);
++    dma_channel_configure(select_chan,&d,&dma_hw->ch[data_chan].read_addr,&next_address,1,false);
++    d=dma_channel_get_default_config(clear_chan);
++    channel_config_set_transfer_data_size(&d,DMA_SIZE_32);
++    channel_config_set_read_increment(&d,false);channel_config_set_write_increment(&d,false);
++    channel_config_set_chain_to(&d,data_chan);
++    dma_channel_configure(clear_chan,&d,&next_address,&silence_address,1,false);
++    pio_sm_clear_fifos(pio,sm);pio_sm_restart(pio,sm);
++    pio_sm_exec(pio,sm,pio_encode_jmp(program_offset));pio_sm_clkdiv_restart(pio,sm);
++    last_irq_us=0;diagnostics.running=true;__dmb();
++    dma_start_channel_mask(1u<<select_chan);
++    pio_sm_set_enabled(pio,sm,true);
++    critical_section_exit(&lock);return true;
++}
++void audio_request_stop(void) {
++    critical_section_enter_blocking(&lock);
++    diagnostics.running=false;
++    pio_sm_set_enabled(pio,sm,false);
++    /* Disable all links before aborting any channel, so no abort can restart
++       another channel in the cycle. */
++    for(int i=0;i<3;i++) {
++        int channel=i==0?data_chan:i==1?select_chan:clear_chan;
++        hw_clear_bits(&dma_hw->ch[channel].ctrl_trig,DMA_CH0_CTRL_TRIG_EN_BITS);
++    }
++    dma_channel_abort(data_chan);dma_channel_abort(select_chan);dma_channel_abort(clear_chan);
++    dma_hw->ints0=1u<<clear_chan;
++    pio_sm_clear_fifos(pio,sm);
++    memset(&pool.slots,0,sizeof(pool.slots));pool.generation++;
++    next_address=silence_address;
++    critical_section_exit(&lock);
++}
++void audio_get_diagnostics(audio_diagnostics_t *out) {
++    critical_section_enter_blocking(&lock);*out=diagnostics;critical_section_exit(&lock);
++}
+--- pre-repair/lib/sound_i2s/sound_i2s.h
++++ repaired/lib/sound_i2s/sound_i2s.h
+@@ -1,33 +1,31 @@
+-/* sound_i2s.h */
+-
+-#ifndef SOUND_I2S_H_FILE
+-#define SOUND_I2S_H_FILE
+-
++#pragma once
+ #include <stdint.h>
+-
++#include <stdbool.h>
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+-
+ struct sound_i2s_config {
+-  uint8_t  pio_num;
+-  uint8_t  pin_scl;
+-  uint8_t  pin_sda;
+-  uint8_t  pin_ws;
+-  uint16_t sample_rate;
+-  uint8_t  bits_per_sample;
+-  bool swap;
+-  uint16_t samples_per_buffer;
++    uint8_t pio_num, pin_scl, pin_sda, pin_ws;
++    uint16_t sample_rate;
++    uint8_t bits_per_sample;
++    bool swap;
++    uint16_t samples_per_buffer;
+ };
+-
+-int sound_i2s_init(const struct sound_i2s_config *cfg);
+-int16_t *sound_i2s_get_next_buffer();
+-int16_t *sound_i2s_get_buffer(int buffer_num);
+-
+-extern volatile unsigned int sound_i2s_num_buffers_played;
+-
++typedef struct { int16_t *samples; uint32_t generation; int id; } audio_buffer_t;
++typedef struct {
++    uint32_t system_clock_hz, frame_rate_millihz, buffer_period_us;
++    uint64_t observed_frames, dma_notifications;
++    uint32_t underruns, late_publications, irq_deadline_misses;
++    uint32_t max_render_us, max_irq_gap_us;
++    bool running;
++} audio_diagnostics_t;
++int sound_i2s_init(const struct sound_i2s_config *config);
++bool audio_acquire_buffer(audio_buffer_t *buffer);
++bool audio_publish_buffer(audio_buffer_t *buffer, uint32_t render_us);
++bool audio_start(void);
++/* Audio owner only; stop must precede any flash lockout. */
++void audio_request_stop(void);
++void audio_get_diagnostics(audio_diagnostics_t *out);
+ #ifdef __cplusplus
+ }
+ #endif
+-
+-#endif /* SOUND_I2S_H_FILE */
+--- pre-repair/lib/sound_i2s/sound_i2s_16bits.pio
++++ repaired/lib/sound_i2s/sound_i2s_16bits.pio
+@@ -37,8 +37,7 @@
+   sm_config_set_out_shift(&sm_config, false, true, 0);
+   sm_config_set_fifo_join(&sm_config, PIO_FIFO_JOIN_TX);
+ 
+-  uint f_clk_sys = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS);
+-  sm_config_set_clkdiv(&sm_config, (f_clk_sys * 1000.f) / (sample_rate * 16 * 2.0f));
++  sm_config_set_clkdiv(&sm_config, clock_get_hz(clk_sys) / (sample_rate * 64.0f));
+ 
+   pio_sm_init(pio, sm, offset, &sm_config);
+ }
+--- pre-repair/looper.c
++++ repaired/looper.c
+@@ -1,280 +1,108 @@
+-#include "pico/stdlib.h"
++#include "looper.h"
++#include "config.h"
++#include "note_router.h"
++#include "display/display.h"
+ #include <stdlib.h>
+-#include "config.h"
+-#include "state.h"
+-#include "looper.h"
+-#include "display/display.h"
+-
+-// Display refresh interval in milliseconds (200ms to reduce I2C contention)
+-#define LOOPER_DISPLAY_REFRESH_MS 200
+-
+-// Single global looper instance
++#include <string.h>
+ static looper_t looper;
+-
+-static void looper_clear_internal(void) {
+-    looper.event_count = 0;
+-    looper.play_index = 0;
+-    looper.loop_length_ms = 0;
+-    looper.has_loop = false;
++static uint16_t held[128],pending_releases;
++static bool recording_limited;
++static uint32_t missed_cycles;
++static uint64_t last_display_us;
++static void refresh(void){display_request_refresh();}
++static void clear_internal(void){
++    looper.event_count=looper.play_index=0;looper.loop_length_ms=0;looper.has_loop=false;
++    memset(held,0,sizeof(held));pending_releases=0;recording_limited=false;
+ }
+-
+-static void looper_restart_playback(void) {
+-    looper.play_index = 0;
+-    looper.play_start_us = time_us_64();
+-    looper.state = LOOP_PLAYING;
++void looper_init(uint16_t capacity,uint32_t duration){
++    free(looper.events);memset(&looper,0,sizeof(looper));
++    looper.events=calloc(capacity,sizeof(looper_event_t));looper.state=LOOP_DISABLED;
++    if(looper.events){looper.max_events=capacity;looper.max_length_ms=duration;}clear_internal();
+ }
+-
+-void looper_init(uint16_t max_events, uint32_t max_length_ms) {
+-    looper.state = LOOP_DISABLED;
+-    looper.events = (looper_event_t *)calloc(max_events, sizeof(looper_event_t));
+-    
+-    if (!looper.events) {
+-        looper.max_events = 0;
+-        looper.max_length_ms = 0;
+-        return;
++bool looper_is_disabled(){return looper.state==LOOP_DISABLED || !looper.events;}
++bool looper_is_recording(){return looper.state==LOOP_RECORDING;}
++bool looper_is_playing(){return looper.state==LOOP_PLAYING;}
++bool looper_has_loop(){return looper.has_loop && looper.loop_length_ms && looper.event_count;}
++bool looper_has_events(){return looper.event_count!=0;}
++bool looper_recording_limited(){return recording_limited;}
++uint32_t looper_missed_cycles(){return missed_cycles;}
++void looper_enable(){if(looper.events && looper_is_disabled())looper.state=LOOP_IDLE;refresh();}
++void looper_clear(){notes_release_source(NOTE_SOURCE_LOOP);clear_internal();if(!looper_is_disabled())looper.state=LOOP_IDLE;refresh();}
++void looper_disable(){notes_release_source(NOTE_SOURCE_LOOP);clear_internal();looper.state=LOOP_DISABLED;refresh();}
++void looper_start_record(){
++    if(looper_is_disabled())return;notes_release_source(NOTE_SOURCE_LOOP);clear_internal();
++    looper.rec_start_us=time_us_64();looper.state=LOOP_RECORDING;refresh();
++}
++static uint32_t record_time(){uint64_t t=(time_us_64()-looper.rec_start_us)/1000;return t>looper.max_length_ms?looper.max_length_ms:(uint32_t)t;}
++static void store_event(looper_event_type_t type,uint8_t a,uint8_t b,int16_t pitch,uint32_t when){
++    looper_event_t *e=&looper.events[looper.event_count++];e->type=type;e->data1=a;e->data2=b;e->pitch=pitch;e->timestamp_ms=when;
++}
++void looper_stop_record_and_play(){
++    if(!looper_is_recording())return;uint32_t length=record_time();if(!length)length=1;
++    /* Every accepted note-on reserved a release slot. Closing the recording
++       cannot lose that release, including at capacity or the time limit. */
++    for(int n=0;n<128;n++)while(held[n]){
++        store_event(LOOPER_EVENT_NOTE_OFF,(uint8_t)n,0,0,length);held[n]--;pending_releases--;
+     }
+-    
+-    looper.max_events = max_events;
+-    looper.max_length_ms = max_length_ms;
+-    looper_clear_internal();
++    looper.loop_length_ms=length;looper.has_loop=looper.event_count>0;
++    looper.play_index=0;looper.play_start_us=time_us_64();looper.state=looper.has_loop?LOOP_PLAYING:LOOP_IDLE;refresh();
+ }
+-
+-void looper_enable() {
+-    if (looper.events && looper_is_disabled()) {
+-        looper.state = LOOP_IDLE;
++void looper_stop(){if(looper_is_disabled())return;notes_release_source(NOTE_SOURCE_LOOP);looper.state=looper_has_loop()?LOOP_PAUSED:LOOP_IDLE;refresh();}
++void looper_restart_from_start(){if(looper_is_disabled() || !looper_has_loop())return;notes_release_source(NOTE_SOURCE_LOOP);looper.play_index=0;looper.play_start_us=time_us_64();looper.state=LOOP_PLAYING;refresh();}
++void looper_onpress(){
++    switch(looper.state){case LOOP_IDLE:case LOOP_PAUSED:looper_start_record();break;case LOOP_RECORDING:looper_stop_record_and_play();break;case LOOP_PLAYING:looper_stop();break;default:break;}
++}
++static void append(looper_event_type_t type,uint8_t a,uint8_t b,int16_t pitch){
++    if(!looper_is_recording())return;
++    if((time_us_64()-looper.rec_start_us)/1000>=looper.max_length_ms){recording_limited=true;looper_stop_record_and_play();return;}
++    int pending=pending_releases;
++    if(type==LOOPER_EVENT_NOTE_ON)pending++;
++    if(type==LOOPER_EVENT_NOTE_OFF){if(!held[a])return;pending--;}
++    if((unsigned)looper.event_count+1+(unsigned)pending>looper.max_events){recording_limited=true;looper_stop_record_and_play();return;}
++    store_event(type,a,b,pitch,record_time());
++    if(type==LOOPER_EVENT_NOTE_ON)held[a]++;
++    if(type==LOOPER_EVENT_NOTE_OFF)held[a]--;
++    pending_releases=(uint16_t)pending;
++}
++void looper_record_note(uint8_t n,uint8_t v,bool on){
++    if(n>=128 || v>=128 || looper_is_disabled())return;
++    on=on && v!=0;
++    if(on && (looper.state==LOOP_IDLE || looper.state==LOOP_PAUSED))looper_start_record();
++    append(on?LOOPER_EVENT_NOTE_ON:LOOPER_EVENT_NOTE_OFF,n,v,0);
++}
++void looper_record_cc(uint8_t cc,uint8_t v){if(cc<128 && v<128)append(LOOPER_EVENT_CC,cc,v,0);}
++void looper_record_pitch(int16_t p){if(p>=-8192 && p<=8191)append(LOOPER_EVENT_PITCH,0,0,p);}
++static void dispatch_until(uint32_t elapsed){
++    while(looper.play_index<looper.event_count){
++        const looper_event_t *e=&looper.events[looper.play_index];if(e->timestamp_ms>elapsed)break;
++        switch(e->type){
++        case LOOPER_EVENT_NOTE_ON:looper_send_note_on(e->data1,e->data2);break;
++        case LOOPER_EVENT_NOTE_OFF:looper_send_note_off(e->data1);break;
++        case LOOPER_EVENT_CC:looper_send_cc(e->data1,e->data2);break;
++        case LOOPER_EVENT_PITCH:looper_send_pitch(e->pitch);break;
++        }
++        looper.play_index++;
+     }
+ }
+-
+-void looper_disable() {
+-    looper.state = LOOP_DISABLED;
+-    looper_clear_internal();
+-    all_notes_off();
++void looper_task(){
++    if(looper_is_disabled())return;uint64_t now=time_us_64();
++    if(looper_is_recording() && now-looper.rec_start_us>=(uint64_t)looper.max_length_ms*1000){recording_limited=true;looper_stop_record_and_play();now=time_us_64();}
++    if(looper_is_playing() && looper_has_loop()){
++        uint64_t elapsed=(now-looper.play_start_us)/1000;
++        if(elapsed>=looper.loop_length_ms){
++            dispatch_until(looper.loop_length_ms);notes_release_source(NOTE_SOURCE_LOOP);
++            uint64_t cycles=elapsed/looper.loop_length_ms;
++            if(cycles>1)missed_cycles+=(uint32_t)(cycles-1);
++            looper.play_start_us+=cycles*looper.loop_length_ms*1000;looper.play_index=0;
++            elapsed%=looper.loop_length_ms;
++        }
++        dispatch_until((uint32_t)elapsed);
++    }
++    if(now-last_display_us>=200000){last_display_us=now;refresh();}
+ }
+-
+-void looper_clear() {
+-    looper_clear_internal();
+-    if (!looper_is_disabled()) {
+-        looper.state = LOOP_IDLE;
+-    }
+-}
+-
+-bool looper_is_disabled() {
+-    return (looper.state == LOOP_DISABLED || looper.events == NULL);
+-}
+-
+-bool looper_is_recording() {
+-    return (looper.state == LOOP_RECORDING);
+-}
+-
+-bool looper_is_playing() {
+-    return (looper.state == LOOP_PLAYING);
+-}
+-
+-bool looper_has_loop() {
+-    return looper.has_loop && looper.loop_length_ms > 0 && looper.event_count > 0;
+-}
+-
+-bool looper_has_events() {
+-    return looper.event_count > 0;
+-}
+-
+-// Display throttle using 32-bit timestamps (faster, 71min wrap is fine for throttle)
+-static uint32_t last_display_refresh_ms_rec = 0;
+-static uint32_t last_display_refresh_ms_play = 0;
+-
+-void looper_start_record() {
+-    if (looper_is_disabled()) { return; }
+-    looper_clear_internal();
+-    looper.rec_start_us = time_us_64();
+-    last_display_refresh_ms_rec = 0;  // Reset display throttle
+-    last_display_refresh_ms_play = 0;
+-    looper.state = LOOP_RECORDING;
+-}
+-
+-void looper_stop_record_and_play() {
+-    if (looper_is_disabled()) { return; }
+-    if (looper.state != LOOP_RECORDING) { return; }
+-
+-    uint64_t now_us = time_us_64();
+-    uint32_t elapsed_ms = (uint32_t)((now_us - looper.rec_start_us) / 1000);
+-    if (elapsed_ms == 0) {
+-        looper_clear();
+-        return;
+-    }
+-    if (elapsed_ms > looper.max_length_ms) {
+-        elapsed_ms = looper.max_length_ms;
+-    }
+-    looper.loop_length_ms = elapsed_ms;
+-    looper.has_loop = (looper.event_count > 0);
+-
+-    if (looper.has_loop) {
+-        looper_restart_playback();
+-    } else {
+-        looper.state = LOOP_IDLE;
+-    }
+-}
+-
+-void looper_stop() {
+-    if (looper_is_disabled()) { return; }
+-    looper.state = looper_has_loop() ? LOOP_PAUSED : LOOP_IDLE;
+-}
+-
+-void looper_restart_from_start() {
+-    if (looper_is_disabled()) { return; }
+-    if (!looper_has_loop()) { return; }
+-    all_notes_off();
+-    looper.play_index = 0;
+-    looper.play_start_us = time_us_64();
+-    looper.state = LOOP_PLAYING;
+-}
+-
+-void looper_onpress() {
+-    switch (looper.state) {
+-        case LOOP_DISABLED:
+-            return;
+-        case LOOP_IDLE:
+-        case LOOP_PAUSED:
+-            looper_start_record();
+-            break;
+-        case LOOP_RECORDING:
+-            looper_stop_record_and_play();
+-            break;
+-        case LOOP_PLAYING:
+-            looper_stop();
+-            break;
+-    }
+-}
+-
+-static void looper_append_event(looper_event_type_t type, uint8_t d1, uint8_t d2, int16_t pitch) {
+-    // Combined check: must be recording with valid events buffer
+-    if (looper.state != LOOP_RECORDING || looper.events == NULL) return;
+-    if (looper.event_count >= looper.max_events) return; // Drop extra events silently
+-
+-    uint64_t now_us = time_us_64();
+-    uint32_t ts_ms = (uint32_t)((now_us - looper.rec_start_us) / 1000);
+-    if (ts_ms > looper.max_length_ms) {
+-        looper_stop_record_and_play();
+-        return;
+-    }
+-
+-    looper_event_t *evt = &looper.events[looper.event_count++];
+-    evt->timestamp_ms = ts_ms;
+-    evt->type = type;
+-    evt->data1 = d1;
+-    evt->data2 = d2;
+-    evt->pitch = pitch;
+-}
+-
+-void looper_record_note(uint8_t note, uint8_t velocity, bool is_on) {
+-    // Early exit when disabled - avoid any work in hot path
+-    if (looper_is_disabled()) return;
+-    
+-    if (looper.state == LOOP_IDLE || looper.state == LOOP_PAUSED) {
+-        looper_start_record();
+-    }
+-    looper_append_event(is_on ? LOOPER_EVENT_NOTE_ON : LOOPER_EVENT_NOTE_OFF, note, velocity, 0);
+-}
+-
+-void looper_record_cc(uint8_t cc_number, uint8_t value) {
+-    if (looper_is_disabled()) return;
+-    looper_append_event(LOOPER_EVENT_CC, cc_number, value, 0);
+-}
+-
+-void looper_record_pitch(int16_t pitch_bend) {
+-    if (looper_is_disabled()) return;
+-    looper_append_event(LOOPER_EVENT_PITCH, 0, 0, pitch_bend);
+-}
+-
+-static void looper_dispatch_event(const looper_event_t *evt) {
+-    switch (evt->type) {
+-        case LOOPER_EVENT_NOTE_ON:
+-            looper_send_note_on(evt->data1, evt->data2);
+-            break;
+-        case LOOPER_EVENT_NOTE_OFF:
+-            looper_send_note_off(evt->data1);
+-            break;
+-        case LOOPER_EVENT_CC:
+-            looper_send_cc(evt->data1, evt->data2);
+-            break;
+-        case LOOPER_EVENT_PITCH:
+-            looper_send_pitch(evt->pitch);
+-            break;
+-        default:
+-            break;
+-    }
+-}
+-
+-void looper_task() {
+-    // Early exit when disabled - avoid all work including time_us_64 call
+-    if (looper_is_disabled()) return;
+-
+-    // Refresh display periodically during recording to advance the clock
+-    if (looper.state == LOOP_RECORDING) {
+-        uint32_t now_ms = time_us_32() / 1000;
+-        if ((now_ms - last_display_refresh_ms_rec) >= LOOPER_DISPLAY_REFRESH_MS) {
+-            display_request_refresh();
+-            last_display_refresh_ms_rec = now_ms;
+-        }
+-        return;
+-    }
+-
+-    if (!looper_is_playing() || !looper_has_loop()) {
+-        return;
+-    }
+-
+-    uint64_t now_us = time_us_64();
+-    uint32_t elapsed_ms = (uint32_t)((now_us - looper.play_start_us) / 1000);
+-
+-    // Restart loop when reaching end
+-    if (elapsed_ms >= looper.loop_length_ms) {
+-        looper_restart_playback();
+-        elapsed_ms = 0;
+-    }
+-
+-    // Dispatch any due events
+-    while (looper.play_index < looper.event_count) {
+-        const looper_event_t *evt = &looper.events[looper.play_index];
+-        if (evt->timestamp_ms <= elapsed_ms) {
+-            looper_dispatch_event(evt);
+-            looper.play_index++;
+-        } else {
+-            break;
+-        }
+-    }
+-
+-    uint32_t now_ms = time_us_32() / 1000;
+-    if ((now_ms - last_display_refresh_ms_play) >= LOOPER_DISPLAY_REFRESH_MS) {
+-        display_request_refresh();
+-        last_display_refresh_ms_play = now_ms;
+-    }
+-}
+-
+-uint32_t looper_get_loop_length_ms() {
+-    return looper.loop_length_ms;
+-}
+-
+-uint16_t looper_get_event_count() {
+-    return looper.event_count;
+-}
+-
+-uint16_t looper_get_play_index() {
+-    return looper.play_index;
+-}
+-
+-looper_state_t looper_get_state() {
+-    return looper.state;
+-}
+-
+-uint32_t looper_get_elapsed_ms() {
+-    if (looper.state == LOOP_PLAYING && looper.loop_length_ms > 0) {
+-        return (uint32_t)((time_us_64() - looper.play_start_us) / 1000);
+-    }
+-    if (looper.state == LOOP_RECORDING) {
+-        return (uint32_t)((time_us_64() - looper.rec_start_us) / 1000);
+-    }
+-    return 0;
+-}
+-
+-uint32_t looper_get_max_length_ms() {
+-    return looper.max_length_ms;
+-}+uint32_t looper_get_loop_length_ms(){return looper.loop_length_ms;}
++uint16_t looper_get_event_count(){return looper.event_count;}
++uint16_t looper_get_play_index(){return looper.play_index;}
++looper_state_t looper_get_state(){return looper.state;}
++uint32_t looper_get_elapsed_ms(){if(looper_is_recording())return record_time();if(looper_is_playing())return (uint32_t)((time_us_64()-looper.play_start_us)/1000);return 0;}
++uint32_t looper_get_max_length_ms(){return looper.max_length_ms;}
+--- pre-repair/looper.h
++++ repaired/looper.h
+@@ -66,6 +66,8 @@
+ uint32_t looper_get_elapsed_ms();
+ uint32_t looper_get_max_length_ms();
+ void looper_task();
++bool looper_recording_limited(void);
++uint32_t looper_missed_cycles(void);
+ 
+ // Looper playback hooks - implemented in main.cpp with C linkage
+ void looper_send_note_on(uint8_t note, uint8_t velocity);
+--- pre-repair/main.cpp
++++ repaired/main.cpp
+@@ -17,7 +17,14 @@
+ #include "pico/multicore.h"
+ #include "sound_i2s.h"
+ #include "pra32-u2-common.h" // https://github.com/risgk/digital-synth-pra32-u2
+-#include "pra32-u2-synth.h"  // PRA32-U2 version 1.6.0
++#include "synth_service.h"
++#include "settings_store.h"
++#include "note_router.h"
++#include "pico/flash.h"
++#include <cstring>
++#include <cstdlib>
++#include <cstdio>
++#include "hardware/uart.h"
+ #include "instrument_preset.h"
+ #include "encoder.h"        // https://github.com/TuriSc/RP2040-Rotary-Encoder
+ #include "button.h"         // https://github.com/TuriSc/RP2040-Button
+@@ -36,14 +43,18 @@
+ 
+ /* Globals */
+ 
+-PRA32_U2_Synth g_synth;
++// The engine is owned exclusively by synth_service.cpp on core 1.
+ 
+ state_t* state;
+ 
+ Imu_data imu_data;
+ 
+-uint8_t **user_presets;
+-uint8_t **user_scales;
++static uint8_t preset_storage[NUM_PRESET_SLOTS][PROGRAM_PARAMS_NUM];
++static uint8_t scale_storage[NUM_SCALE_SLOTS][12];
++static uint8_t *preset_rows[]={preset_storage[0],preset_storage[1],preset_storage[2],preset_storage[3]};
++static uint8_t *scale_rows[]={scale_storage[0],scale_storage[1],scale_storage[2],scale_storage[3]};
++uint8_t **user_presets=preset_rows;
++uint8_t **user_scales=scale_rows;
+ 
+ #if defined (USE_DISPLAY)
+ ssd1306_t display;
+@@ -51,12 +62,44 @@
+ 
+ static alarm_id_t power_on_alarm_id;
+ static alarm_id_t long_press_alarm_id;
+-static alarm_id_t flash_write_alarm_id;
++static bool save_pending=false;
++static uint64_t save_due_us;
++static int saved_sector=-1;
++static uint32_t saved_generation;
++static settings_data_t saved_settings;
++static bool have_saved_settings;
++void request_flash_write();
++void release_live_notes();
++extern "C" void all_notes_off();
++extern "C" bool settings_save_pending(){return save_pending;}
+ 
+ // Volatile flags for deferred interrupt processing
+-static volatile int8_t encoder_direction = 0;  // 0 = no change, 1 = up, -1 = down
++static volatile int32_t encoder_direction = 0;  // 0 = no change, 1 = up, -1 = down
+ static volatile bool button_pressed = false;
+ static volatile bool button_long_press_pending = false;
++
++static uint32_t midi_overflows;
++static void diagnostics_task(){
++#if DODEPAN_UART_DIAGNOSTICS
++    static bool initialized;
++    static char line[512];static size_t length,position;
++    static uint64_t last,previous;static uint32_t max_loop_us;
++    uint64_t now=time_us_64();
++    if(previous && now-previous>max_loop_us)max_loop_us=(uint32_t)(now-previous);previous=now;
++    if(!initialized){uart_init(uart1,115200);gpio_set_function(8,GPIO_FUNC_UART);gpio_set_function(9,GPIO_FUNC_UART);initialized=true;}
++    for(unsigned i=0;i<16 && position<length && uart_is_writable(uart1);i++)uart_get_hw(uart1)->dr=line[position++];
++    synth_diagnostics_t s;synth_get_diagnostics(&s);
++    if(position<length || !s.ready || now-last<1000000)return;
++    last=now;audio_diagnostics_t a;audio_get_diagnostics(&a);
++    int n=snprintf(line,sizeof(line),"Dodepan %s src=%s engine=%s flags=%u%u%u t=%llu clk=%lu frames=%u rate_mHz=%lu render_max=%lu irq_gap=%lu underrun=%lu late=%lu irq_miss=%lu dma=%llu observed_frames=%llu q_high=%lu q_loss=%lu midi_loss=%lu loop_gap=%lu imu=%u save=%u suspended=%u\n",
++        PROGRAM_VERSION,DODEPAN_SOURCE_ID,DODEPAN_ENGINE_ID,DODEPAN_DISABLE_DISPLAY,DODEPAN_DISABLE_IMU,DODEPAN_DISABLE_PERSISTENCE,(unsigned long long)(now/1000000),(unsigned long)a.system_clock_hz,AUDIO_BUFFER_LENGTH,
++        (unsigned long)a.frame_rate_millihz,(unsigned long)s.max_render_us,(unsigned long)a.max_irq_gap_us,
++        (unsigned long)a.underruns,(unsigned long)a.late_publications,(unsigned long)a.irq_deadline_misses,(unsigned long long)a.dma_notifications,(unsigned long long)a.observed_frames,
++        (unsigned long)s.queue_high_water,(unsigned long)s.queue_overflows,(unsigned long)midi_overflows,
++        (unsigned long)max_loop_us,imu_data.available,save_pending,s.suspended);
++    length=n>0?(size_t)n:0;if(length>=sizeof(line))length=sizeof(line)-1;position=0;
++#endif
++}
+ 
+ void core1_main();
+ 
+@@ -81,10 +124,8 @@
+ }
+ 
+ void load_user_preset(uint8_t instrument) {
+-    uint8_t preset_num = instrument - 12; // Subtracting the 12 default presets (Dodepan + 3 child + 8 PRA32-U)
+-    for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-        g_synth.control_change(dodepan_program_parameters[i], user_presets[preset_num][i]);
+-    }
++    if(instrument<USER_INSTRUMENT_BASE || instrument>=INSTRUMENT_COUNT)return;
++    g_synth.apply_preset(user_presets[instrument-USER_INSTRUMENT_BASE]);
+ }
+ 
+ static inline void sync_control_change() {
+@@ -95,42 +136,31 @@
+ }
+ 
+ void update_instrument() {
++    all_notes_off();
+     uint8_t instrument = get_instrument();
+     switch (instrument) {
+         case 0: // Load custom Dodepan preset
+-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-                g_synth.control_change(dodepan_program_parameters[i], dodepan_preset[i]);
+-            }
++            g_synth.apply_preset(dodepan_preset);
+             set_preset_slot(-1); // No slot selected
+         break;
+         case 1: // Magic Bell - child-friendly preset
+-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-                g_synth.control_change(dodepan_program_parameters[i], magic_bell_preset[i]);
+-            }
++            g_synth.apply_preset(magic_bell_preset);
+             set_preset_slot(-1);
+         break;
+         case 2: // Space Piano - child-friendly preset
+-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-                g_synth.control_change(dodepan_program_parameters[i], space_piano_preset[i]);
+-            }
++            g_synth.apply_preset(space_piano_preset);
+             set_preset_slot(-1);
+         break;
+         case 3: // Robot Voice - child-friendly preset
+-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-                g_synth.control_change(dodepan_program_parameters[i], robot_voice_preset[i]);
+-            }
++            g_synth.apply_preset(robot_voice_preset);
+             set_preset_slot(-1);
+         break;
+         case 4: // Synthwave - lush 80s style pad
+-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-                g_synth.control_change(dodepan_program_parameters[i], synthwave_preset[i]);
+-            }
++            g_synth.apply_preset(synthwave_preset);
+             set_preset_slot(-1);
+         break;
+         case 5: // Bleep Bloop - Adventure Time style beeps
+-            for (uint32_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-                g_synth.control_change(dodepan_program_parameters[i], bleep_bloop_preset[i]);
+-            }
++            g_synth.apply_preset(bleep_bloop_preset);
+             set_preset_slot(-1);
+         break;
+         case 14:
+@@ -154,145 +184,75 @@
+     }
+ }
+ 
+-bool load_flash_data() { // Only called at startup
+-    // Read address is different than write address
+-    const uint8_t *stored_data = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
+-
+-    // Validation
+-    uint8_t magic[MAGIC_NUMBER_LENGTH] = MAGIC_NUMBER;
+-    bool invalid_data = false;
+-    for(uint8_t i=0; i<MAGIC_NUMBER_LENGTH; i++){
+-        if(stored_data[i] != magic[i]){ return false; } // Invalid data
+-    }
+-    
+-    if((stored_data[MAGIC_NUMBER_LENGTH + 0] > HIGHEST_KEY)          || // Validate key
+-       (stored_data[MAGIC_NUMBER_LENGTH + 1] > NUM_SCALES -1)        || // Validate scale
+-       (stored_data[MAGIC_NUMBER_LENGTH + 2] > 13 + NUM_PRESET_SLOTS) || // Validate instrument
+-       (stored_data[MAGIC_NUMBER_LENGTH + 3] > 0x03)                 || // Validate IMU configuration
+-       (stored_data[MAGIC_NUMBER_LENGTH + 4] > 8)                    || // Validate volume
+-       (stored_data[MAGIC_NUMBER_LENGTH + 5] > CONTRAST_AUTO)        || // Validate contrast
+-       (stored_data[MAGIC_NUMBER_LENGTH + 6] >= NUM_CHORD_MODES)        // Validate chord mode
+-    ) { return false; } // Invalid data
+-
+-    // Data is valid and can be loaded safely
+-    set_key(             stored_data[MAGIC_NUMBER_LENGTH + 0]);
+-    uint8_t scale =      stored_data[MAGIC_NUMBER_LENGTH + 1] ;
+-    set_instrument(      stored_data[MAGIC_NUMBER_LENGTH + 2]);
+-    set_imu_axes(        stored_data[MAGIC_NUMBER_LENGTH + 3]);
+-    set_volume(          stored_data[MAGIC_NUMBER_LENGTH + 4]);
+-    set_contrast(        stored_data[MAGIC_NUMBER_LENGTH + 5]);
+-    set_chord_mode(      stored_data[MAGIC_NUMBER_LENGTH + 6]);
+-
+-    // Load user presets
+-    uint8_t offset = MAGIC_NUMBER_LENGTH + 12;
+-    for (uint8_t i = 0; i < NUM_PRESET_SLOTS; i++) {
+-        for (uint8_t j = 0; j < PROGRAM_PARAMS_NUM; j++) {
+-            user_presets[i][j] = stored_data[offset++];
+-        }
+-    }
+-    update_instrument();
+-
+-    // Load user scales
+-    for (uint8_t i = 0; i < NUM_SCALE_SLOTS; i++) {
+-        for (uint8_t j = 0; j < 12; j++) {
+-            user_scales[i][j] = stored_data[offset++];
+-        }
+-    }
+-    set_and_extend_scale(scale);
+-
+-#if defined (USE_DISPLAY)
++bool load_flash_data() {
++    settings_data_t data;
++    saved_sector=settings_select((const uint8_t*)(XIP_BASE+SETTINGS_SECTOR_A),(const uint8_t*)(XIP_BASE+SETTINGS_SECTOR_B),NUM_SCALES,&data,&saved_generation);
++    bool legacy=saved_sector<0;
++    if(legacy && !settings_decode_legacy((const uint8_t*)(XIP_BASE+SETTINGS_LEGACY_OFFSET),SETTINGS_LEGACY_BYTES,NUM_SCALES,&data))return false;
++    set_key(data.key);set_instrument(data.instrument);set_imu_axes(data.imu_axes);
++    set_volume(data.volume);set_contrast(data.contrast);set_chord_mode(data.chord);
++    for(unsigned i=0;i<4;i++){memcpy(user_presets[i],data.presets[i],PROGRAM_PARAMS_NUM);memcpy(user_scales[i],data.scales[i],12);}
++    set_and_extend_scale(data.scale);update_instrument();
++    saved_settings=data;have_saved_settings=!legacy;
++    if(legacy)request_flash_write();
++#if defined(USE_DISPLAY)
+     display_update_contrast(&display);
+ #endif
+-
+     return true;
+ }
+ 
+-int64_t write_flash_data(alarm_id_t id, void *) {
+-    // Initialize the buffer with a signature
+-    uint8_t flash_buffer[FLASH_PAGE_SIZE] = MAGIC_NUMBER;
+-    uint8_t index = MAGIC_NUMBER_LENGTH;
+-
+-    // Gather the rest of the data
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 0] = get_key();
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 1] = get_scale();
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 2] = get_instrument();
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 3] = get_imu_axes();
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 4] = get_volume();
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 5] = get_contrast();
+-    flash_buffer[MAGIC_NUMBER_LENGTH + 6] = get_chord_mode();
+-
+-    // Stop here if the stored data is the same as what we're about to write
+-    const uint8_t *stored_data = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
+-    if( stored_data[MAGIC_NUMBER_LENGTH + 0] == flash_buffer[MAGIC_NUMBER_LENGTH + 0] &&
+-        stored_data[MAGIC_NUMBER_LENGTH + 1] == flash_buffer[MAGIC_NUMBER_LENGTH + 1] &&
+-        stored_data[MAGIC_NUMBER_LENGTH + 2] == flash_buffer[MAGIC_NUMBER_LENGTH + 2] &&
+-        stored_data[MAGIC_NUMBER_LENGTH + 3] == flash_buffer[MAGIC_NUMBER_LENGTH + 3] &&
+-        stored_data[MAGIC_NUMBER_LENGTH + 4] == flash_buffer[MAGIC_NUMBER_LENGTH + 4] &&
+-        stored_data[MAGIC_NUMBER_LENGTH + 5] == flash_buffer[MAGIC_NUMBER_LENGTH + 5] &&
+-        stored_data[MAGIC_NUMBER_LENGTH + 6] == flash_buffer[MAGIC_NUMBER_LENGTH + 6] &&
+-        get_preset_has_changes() == false &&
+-        get_scale_has_changes()  == false) { return 0; }
+-
+-    // Reserving bytes MAGIC_NUMBER_LENGTH + [7-11] for future firmware versions
+-
+-    // Add user presets to the write buffer
+-    uint8_t offset = MAGIC_NUMBER_LENGTH + 12;
+-    for (uint8_t i = 0; i < NUM_PRESET_SLOTS; i++) {
+-        for (uint8_t j = 0; j < PROGRAM_PARAMS_NUM; j++) {
+-            flash_buffer[offset++] = user_presets[i][j];
+-        }
+-    }
+-
+-    // Add user scales to the write buffer
+-    for (uint8_t i = 0; i < NUM_SCALE_SLOTS; i++) {
+-        for (uint8_t j = 0; j < 12; j++) {
+-            flash_buffer[offset++] = user_scales[i][j];
+-        }
+-    }
+-
+-    // Turn on built-in LED
+-    gpio_put(PICO_DEFAULT_LED_PIN, 1);
+-
+-    // Stop audio and synth processes on core1
+-    multicore_reset_core1();
+-
+-    // Disable interrupts, write, and restore interrupts
+-    uint32_t ints_id = save_and_disable_interrupts();
+-	flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE); // Required for flash_range_program to work
+-	flash_range_program(FLASH_TARGET_OFFSET, flash_buffer, FLASH_PAGE_SIZE);
+-	restore_interrupts (ints_id);
+-
+-    // Restart processes on core1
+-    multicore_launch_core1(core1_main);
+-
+-    // Wash "dirty" flags
+-    set_preset_has_changes(false);
+-    set_scale_has_changes(false);
+-
+-    // Turn off built-in LED
+-    gpio_put(PICO_DEFAULT_LED_PIN, 0);
+-
+-    return 0;
+-}
+-
+-void request_flash_write() {
+-    // Schedule writing settings to flash.
+-    // This delay is introduced to minimize write operations.
+-    if (flash_write_alarm_id) cancel_alarm(flash_write_alarm_id);
+-    flash_write_alarm_id = add_alarm_in_ms(FLASH_WRITE_DELAY_S * 1000, write_flash_data, NULL, true);
+-}
+-
+-void submit_preset_slot() {
+-    int8_t slot = get_preset_slot();
+-    if(slot == -1) { return; }
+-    for (uint8_t i = 0; i < PROGRAM_PARAMS_NUM; i++) {
+-        user_presets[slot][i] = get_argument_from_parameter(i);
+-    }
+-    set_preset_has_changes(true);
+-    request_flash_write();
+-
+-    // Since we've written a preset, let's select it on the main screen
+-    set_instrument(9 + slot);
++struct flash_transaction_t { uint32_t offset; uint8_t record[SETTINGS_RECORD_BYTES]; };
++static void flash_transaction(void *context) {
++    auto *tx=(flash_transaction_t*)context;
++    flash_range_erase(tx->offset,FLASH_SECTOR_SIZE);
++    flash_range_program(tx->offset,tx->record,SETTINGS_RECORD_BYTES);
++}
++static settings_data_t capture_settings() {
++    settings_data_t data{};
++    data.key=get_key();data.scale=get_scale();data.instrument=get_instrument();data.imu_axes=get_imu_axes();
++    data.volume=get_volume();data.contrast=get_contrast();data.chord=get_chord_mode();
++    for(unsigned i=0;i<4;i++){memcpy(data.presets[i],user_presets[i],PROGRAM_PARAMS_NUM);memcpy(data.scales[i],user_scales[i],12);}
++    return data;
++}
++static void persistence_task() {
++    uint8_t slot,values[PROGRAM_PARAMS_NUM];
++    while(synth_take_capture(&slot,values)){
++        memcpy(user_presets[slot],values,PROGRAM_PARAMS_NUM);set_preset_has_changes(true);
++        set_instrument(USER_INSTRUMENT_BASE+slot);request_flash_write();display_request_refresh();
++    }
++    if(!save_pending || time_us_64()<save_due_us)return;
++#if DODEPAN_DISABLE_PERSISTENCE
++    return;
++#endif
++    if(notes_any_active() || touch_any_held() || looper_is_playing() || looper_is_recording() || demo_is_playing()){
++        synth_request_suspend(false);return;
++    }
++    settings_data_t data=capture_settings();
++    if(have_saved_settings && !memcmp(&data,&saved_settings,sizeof(data))){
++        save_pending=false;synth_request_suspend(false);display_request_refresh();return;
++    }
++    synth_diagnostics_t audio;synth_get_diagnostics(&audio);
++    if(audio.quiet_ms<250)return;
++    synth_request_suspend(true);if(!audio.suspended)return;
++    flash_transaction_t tx{};int next=saved_sector==0?1:0;
++    tx.offset=next?SETTINGS_SECTOR_B:SETTINGS_SECTOR_A;
++    bool ok=settings_encode(tx.record,sizeof(tx.record),NUM_SCALES,&data,saved_generation+1);
++    if(ok)ok=flash_safe_execute(flash_transaction,&tx,1000)==PICO_OK;
++    settings_data_t verify;uint32_t generation;
++    if(ok)ok=settings_decode((const uint8_t*)(XIP_BASE+tx.offset),SETTINGS_RECORD_BYTES,NUM_SCALES,&verify,&generation) && generation==saved_generation+1 && !memcmp(&verify,&data,sizeof(data));
++    if(ok){saved_sector=next;saved_generation++;saved_settings=data;have_saved_settings=true;save_pending=false;set_preset_has_changes(false);set_scale_has_changes(false);}
++    else save_due_us=time_us_64()+5000000;
++    synth_request_suspend(false);display_request_refresh();
++}
++
++void request_flash_write(){
++    save_pending=true;save_due_us=time_us_64()+(uint64_t)FLASH_WRITE_DELAY_S*1000000;
++    display_request_refresh();
++}
++
++void submit_preset_slot(){
++    int8_t slot=get_preset_slot();if(slot<0 || slot>=NUM_PRESET_SLOTS)return;
++    g_synth.capture_preset((uint8_t)slot);
+ }
+ 
+ void submit_scale_slot() {
+@@ -313,9 +273,7 @@
+ 
+ /* Note and audio */
+ 
+-uint8_t get_note_by_id(uint8_t id) {
+-    return get_key() + get_extended_scale(id);
+-}
++uint8_t get_note_by_id(uint8_t id){if(id>=12)return 0;unsigned n=(unsigned)get_key()+get_extended_scale(id);return n<=127?n:127;}
+ 
+ // Chord interval definitions in semitones
+ // Power chord: root + perfect 5th (7 semitones)
+@@ -352,30 +310,38 @@
+     VOICING_SUS2,  VOICING_SUS4, VOICING_9TH,    // row 2 (tilt down/toward)
+ };
+ 
+-// Track active chord notes for each pad (for proper note_off)
+-static uint8_t active_chord_notes[12][5];  // [pad_id][note_index] - max 5 notes per chord (for 9th)
+-static uint8_t active_chord_count[12];     // How many notes active per pad
+-static bool portamento_enabled = false;    // Track if we've enabled portamento
+-
+-// For tilt chord rolling: track held pads, their root notes and velocities
+-static bool pad_held[12] = {false};
+-static uint8_t pad_root_note[12];
+-static uint8_t pad_velocity[12];
+-static uint8_t last_tilt_voicing = 0xFF;   // Track last voicing to detect changes
+-
+-static const struct sound_i2s_config sound_config = {
+-    .pio_num         = I2S_PIO_NUM,
+-    .pin_scl         = I2S_CLOCK_PIN_BASE,
+-    .pin_sda         = I2S_DATA_PIN,
+-    .pin_ws          = I2S_CLOCK_PIN_BASE + 1,
+-    .sample_rate     = SOUND_OUTPUT_FREQUENCY,
+-    .bits_per_sample = 16,
+-    .samples_per_buffer = AUDIO_BUFFER_LENGTH,
+-};
+-
+-static inline uint32_t tudi_midi_write24 (uint8_t jack_id, uint8_t b1, uint8_t b2, uint8_t b3) {
+-    uint8_t msg[3] = { b1, b2, b3 };
+-    return tud_midi_stream_write(jack_id, msg, 3);
++static uint8_t active_chord_notes[12][5],active_chord_count[12];
++static bool pad_held[12];
++static uint8_t pad_root_note[12],pad_velocity[12],pad_owner[12];
++void note_off(uint8_t id);
++
++// Core-0-only USB packet queue. Never block control processing on the host.
++static uint8_t midi_packets[256][4];
++static uint16_t midi_read,midi_write,midi_count;
++
++static bool midi_panic_pending;
++static inline uint32_t tudi_midi_write24(uint8_t jack,uint8_t status,uint8_t a,uint8_t b){
++    if(!tud_midi_mounted())return 0;
++    if(midi_panic_pending)return 0;
++    if(midi_count==256){midi_count=midi_read=midi_write=0;midi_overflows++;midi_panic_pending=true;return 0;}
++    uint8_t *p=midi_packets[midi_write];p[0]=(jack<<4)|(status>>4);p[1]=status;p[2]=a;p[3]=b;
++    midi_write=(midi_write+1)&255;midi_count++;return 3;
++}
++static void midi_output_task(){
++    static uint8_t panic_step;
++    if(!tud_midi_mounted()){midi_count=midi_read=midi_write=0;midi_panic_pending=false;panic_step=0;return;}
++    // USB-MIDI packet API accepts a complete event or retains it for retry.
++    if(midi_panic_pending){
++        const uint8_t controllers[]={64,123,120};
++        uint8_t p[]={0x0b,0xb0,controllers[panic_step],0};
++        if(tud_midi_packet_write(p) && ++panic_step==3){panic_step=0;midi_panic_pending=false;}
++        return;
++    }
++    panic_step=0;
++    for(unsigned i=0;i<16 && midi_count;i++){
++        if(!tud_midi_packet_write(midi_packets[midi_read]))break;
++        midi_read=(midi_read+1)&255;midi_count--;
++    }
+ }
+ 
+ // Helper functions for playing notes, callable from C (arpeggiator.c)
+@@ -385,39 +351,35 @@
+ uint8_t get_tilt_zone() {
+     return imu_data.tilt_zone;
+ }
++void note_sink_on(uint8_t n,uint8_t v){g_synth.note_on(n,v);
++#if defined(USE_MIDI)
++    tudi_midi_write24(0,0x90,n,v);
++#endif
++}
++void note_sink_off(uint8_t n){g_synth.note_off(n);
++#if defined(USE_MIDI)
++    tudi_midi_write24(0,0x80,n,0);
++#endif
++}
++void note_sink_cc(uint8_t c,uint8_t v){g_synth.control_change(c,v);
++#if defined(USE_MIDI)
++    tudi_midi_write24(0,0xb0,c,v);
++#endif
++}
+ // Helper to play a single note (internal synth + MIDI)
+ // Called by both note_on and the arpeggiator
+-void play_single_note(uint8_t note, uint8_t velocity) {
+-    g_synth.note_on(note, velocity);
+-#if defined(USE_MIDI)
+-    tudi_midi_write24(0, 0x90, note, velocity);
+-#endif
+-}
++void play_single_note(uint8_t n,uint8_t v){notes_on(NOTE_SOURCE_ARP,n,v);}
+ 
+ // Helper to stop a single note (internal synth + MIDI)
+ // Called by both note_off and the arpeggiator
+-void stop_single_note(uint8_t note) {
+-    g_synth.note_off(note);
+-#if defined(USE_MIDI)
+-    tudi_midi_write24(0, 0x80, note, 0);
+-#endif
+-}
++void stop_single_note(uint8_t n){notes_off(NOTE_SOURCE_ARP,n);}
+ 
+ // Looper playback hooks (called from looper.c)
+-void looper_send_note_on(uint8_t note, uint8_t velocity) {
+-    play_single_note(note, velocity);
+-}
+-
+-void looper_send_note_off(uint8_t note) {
+-    stop_single_note(note);
+-}
+-
+-void looper_send_cc(uint8_t cc_number, uint8_t value) {
+-    g_synth.control_change(cc_number, value);
+-#if defined(USE_MIDI)
+-    tudi_midi_write24(0, 0xB0, cc_number, value);
+-#endif
+-}
++void looper_send_note_on(uint8_t n,uint8_t v){notes_on(NOTE_SOURCE_LOOP,n,v);}
++
++void looper_send_note_off(uint8_t n){notes_off(NOTE_SOURCE_LOOP,n);}
++
++void looper_send_cc(uint8_t c,uint8_t v){notes_control(NOTE_SOURCE_LOOP,c,v);}
+ 
+ void looper_send_pitch(int16_t pitch_bend) {
+     int16_t bend = pitch_bend + 8192; // Convert signed back to 14-bit MIDI range
+@@ -433,235 +395,66 @@
+ 
+ } // extern "C"
+ 
+-void note_on(uint8_t id, uint8_t velocity) {
+-    uint8_t note = get_note_by_id(id);
+-    uint8_t chord_mode = get_chord_mode();
+-    
+-    // Ensure polyphonic mode is set for chords (belt and suspenders)
+-    if (chord_mode != CHORD_OFF) {
+-        g_synth.control_change(VOICE_MODE, VOICE_POLYPHONIC);
+-    }
+-    
+-    // Reset active notes for this pad
+-    active_chord_count[id] = 0;
+-    
+-    // Always play root note
+-    play_single_note(note, velocity);
+-    looper_record_note(note, velocity, true);
+-    active_chord_notes[id][active_chord_count[id]++] = note;
+-    
+-    switch(chord_mode) {
+-        case CHORD_OFF:
+-            // Already played the root note
+-            break;
+-            
+-        case CHORD_POWER: {
+-            // Root + Perfect 5th (7 semitones up)
+-            uint8_t fifth = note + INTERVAL_FIFTH;
+-            if (fifth <= 127) {
+-                sleep_us(100);  // Brief delay for voice allocation
+-                play_single_note(fifth, velocity);
+-                looper_record_note(fifth, velocity, true);
+-                active_chord_notes[id][active_chord_count[id]++] = fifth;
+-            }
+-            break;
+-        }
+-        
+-        case CHORD_TRIAD: {
+-            // Root + Major 3rd (4 semitones) + Perfect 5th (7 semitones)
+-            uint8_t third = note + INTERVAL_THIRD;
+-            uint8_t fifth = note + INTERVAL_FIFTH;
+-            if (third <= 127) {
+-                sleep_us(100);  // Brief delay for voice allocation
+-                play_single_note(third, velocity);
+-                looper_record_note(third, velocity, true);
+-                active_chord_notes[id][active_chord_count[id]++] = third;
+-            }
+-            if (fifth <= 127) {
+-                sleep_us(100);  // Brief delay for voice allocation
+-                play_single_note(fifth, velocity);
+-                looper_record_note(fifth, velocity, true);
+-                active_chord_notes[id][active_chord_count[id]++] = fifth;
+-            }
+-            break;
+-        }
+-        
+-        case CHORD_OCTAVE: {
+-            // Root + Octave (12 semitones up, not scale degrees)
+-            uint8_t octave = note + 12;
+-            if (octave <= 127) {  // MIDI note range check
+-                sleep_us(100);  // Brief delay for voice allocation
+-                play_single_note(octave, velocity);
+-                looper_record_note(octave, velocity, true);
+-                active_chord_notes[id][active_chord_count[id]++] = octave;
+-            }
+-            break;
+-        }
+-        
+-        case CHORD_TILT: {
+-            // Tilt-based voicing with rolling support
+-            uint8_t zone = imu_data.tilt_zone;
+-            uint8_t voicing = tilt_zone_voicing[zone];
+-            
+-            // Enable portamento for smooth transitions
+-            if (!portamento_enabled) {
+-                g_synth.control_change(5, PORTAMENTO_TIME);   // CC5 = portamento time
+-                g_synth.control_change(65, PORTAMENTO_ON);    // CC65 = portamento on
+-                portamento_enabled = true;
+-            }
+-            
+-            // Track this pad for rolling chord updates
+-            pad_held[id] = true;
+-            pad_root_note[id] = note;
+-            pad_velocity[id] = velocity;
+-            last_tilt_voicing = voicing;
+-            
+-            // VOICING_BASE: fall back to simple major triad
+-            if (voicing == VOICING_BASE) {
+-                voicing = VOICING_MAJ;
+-            }
+-            
+-            // Play intervals from the voicing table
+-            const uint8_t *intervals = voicing_intervals[voicing];
+-            for (uint8_t i = 0; i < 5 && intervals[i] != 0xFF; i++) {
+-                uint8_t chord_note = note + intervals[i];
+-                if (chord_note <= 127 && active_chord_count[id] < 5) {
+-                    sleep_us(100);  // Brief delay for voice allocation
+-                    play_single_note(chord_note, velocity);
+-                    looper_record_note(chord_note, velocity, true);
+-                    active_chord_notes[id][active_chord_count[id]++] = chord_note;
+-                }
+-            }
+-            break;
+-        }
+-    }
+-}
+-
+-void note_off(uint8_t id) {
+-    // Clear pad held tracking for tilt rolling
+-    pad_held[id] = false;
+-    
+-    // Stop all notes that were started for this pad
+-    for (uint8_t i = 0; i < active_chord_count[id]; i++) {
+-        uint8_t note = active_chord_notes[id][i];
+-        stop_single_note(note);
+-        looper_record_note(note, 0, false);
+-    }
+-    active_chord_count[id] = 0;
++static uint8_t make_chord(uint8_t root,uint8_t mode,uint8_t zone,uint8_t *notes){
++    uint8_t count=0;notes[count++]=root;
++    uint8_t local[5]={0xff,0xff,0xff,0xff,0xff};const uint8_t *intervals=local;
++    if(mode==CHORD_POWER)local[0]=7;
++    if(mode==CHORD_TRIAD){local[0]=4;local[1]=7;}
++    if(mode==CHORD_OCTAVE)local[0]=12;
++    if(mode==CHORD_TILT){uint8_t v=tilt_zone_voicing[zone<9?zone:4];if(v==VOICING_BASE)v=VOICING_MAJ;intervals=voicing_intervals[v];}
++    for(unsigned i=0;i<5 && intervals[i]!=0xff && count<5;i++){unsigned n=(unsigned)root+intervals[i];if(n<=127)notes[count++]=(uint8_t)n;}
++    return count;
++}
++void note_on(uint8_t id,uint8_t velocity){
++    if(id>=12)return;note_off(id);
++    uint8_t mode=get_chord_mode();pad_root_note[id]=get_note_by_id(id);pad_velocity[id]=velocity;pad_held[id]=true;
++    if(mode!=CHORD_OFF)g_synth.control_change(VOICE_MODE,VOICE_POLYPHONIC);
++    active_chord_count[id]=make_chord(pad_root_note[id],mode,imu_data.tilt_zone,active_chord_notes[id]);
++    for(unsigned i=0;i<active_chord_count[id];i++){uint8_t n=active_chord_notes[id][i];notes_on(id,n,velocity);looper_record_note(n,velocity,true);}
++}
++
++void note_off(uint8_t id){
++    if(id>=12)return;pad_held[id]=false;
++    for(unsigned i=0;i<active_chord_count[id];i++){uint8_t n=active_chord_notes[id][i];notes_off(id,n);looper_record_note(n,0,false);}
++    active_chord_count[id]=0;
+ }
+ 
+ // Update chord voicing for all held pads when tilt zone changes (rolling chords)
+-// Uses voice morphing: plays new notes without retriggering, letting portamento glide
+-void tilt_chord_update() {
+-    uint8_t zone = imu_data.tilt_zone;
+-    uint8_t voicing = tilt_zone_voicing[zone];
+-    
+-    // VOICING_BASE: fall back to major
+-    if (voicing == VOICING_BASE) {
+-        voicing = VOICING_MAJ;
+-    }
+-    
+-    // Skip if voicing hasn't changed
+-    if (voicing == last_tilt_voicing) {
+-        return;
+-    }
+-    last_tilt_voicing = voicing;
+-    
+-    const uint8_t *new_intervals = voicing_intervals[voicing];
+-    
+-    // Update all held pads with new voicing
+-    for (uint8_t id = 0; id < 12; id++) {
+-        if (!pad_held[id]) continue;
+-        
+-        uint8_t root = pad_root_note[id];
+-        uint8_t vel = pad_velocity[id];
+-        
+-        // Build new chord note list
+-        uint8_t new_notes[5];
+-        uint8_t new_count = 0;
+-        for (uint8_t i = 0; i < 5 && new_intervals[i] != 0xFF; i++) {
+-            uint8_t chord_note = root + new_intervals[i];
+-            if (chord_note <= 127) {
+-                new_notes[new_count++] = chord_note;
+-            }
+-        }
+-        
+-        // Morph existing voices to new pitches by index
+-        // Voice 0 -> new note 0, voice 1 -> new note 1, etc.
+-        // This lets portamento glide between pitches
+-        uint8_t old_count = active_chord_count[id];
+-        uint8_t max_voices = (old_count > new_count) ? old_count : new_count;
+-        
+-        for (uint8_t i = 0; i < max_voices; i++) {
+-            if (i < old_count && i < new_count) {
+-                // Morph: if note changed, play new note (portamento will glide)
+-                if (active_chord_notes[id][i] != new_notes[i]) {
+-                    // Just play the new note - synth will handle legato/portamento
+-                    g_synth.note_on(new_notes[i], vel);
+-                    active_chord_notes[id][i] = new_notes[i];
+-                }
+-            } else if (i >= old_count && i < new_count) {
+-                // New voice needed - play it
+-                play_single_note(new_notes[i], vel);
+-                active_chord_notes[id][i] = new_notes[i];
+-            } else if (i < old_count && i >= new_count) {
+-                // Extra old voice - stop it
+-                stop_single_note(active_chord_notes[id][i]);
+-            }
+-        }
+-        active_chord_count[id] = new_count;
+-    }
+-}
+-
+-void touch_on(uint8_t id) {
+-    // Set the velocity according to accelerometer data.
+-    // The range of velocity is 0-127, but here it's clamped to 64-127
+-    uint8_t velocity = imu_data.acceleration;
+-
+-    // Track active pad and note for visual feedback
+-    set_pad_active(id, true);
+-    set_last_note(get_note_by_id(id));
+-
+-    // Route through arpeggiator if enabled
+-    if (arpeggiator_is_enabled()) {
+-        arpeggiator_pad_on(id, velocity);
+-    } else {
+-        note_on(id, velocity);
+-    }
+-
+-    // Since a note_on event can start the looper recording,
+-    // a display refresh needs to be requested here (non-blocking).
+-#if defined (USE_DISPLAY)
++// Retain common pitches; send balanced releases and onsets for changed pitches.
++void tilt_chord_update(){
++    if(get_chord_mode()!=CHORD_TILT)return;
++    for(uint8_t id=0;id<12;id++)if(pad_held[id]){
++        uint8_t target[5];uint8_t count=make_chord(pad_root_note[id],CHORD_TILT,imu_data.tilt_zone,target);
++        for(unsigned i=0;i<active_chord_count[id];i++){
++            uint8_t n=active_chord_notes[id][i];bool keep=false;for(unsigned j=0;j<count;j++)keep|=target[j]==n;
++            if(!keep){notes_off(id,n);looper_record_note(n,0,false);}
++        }
++        for(unsigned i=0;i<count;i++){
++            uint8_t n=target[i];bool old=false;for(unsigned j=0;j<active_chord_count[id];j++)old|=active_chord_notes[id][j]==n;
++            if(!old){notes_on(id,n,pad_velocity[id]);looper_record_note(n,pad_velocity[id],true);}
++        }
++        memcpy(active_chord_notes[id],target,count);active_chord_count[id]=count;
++    }
++}
++
++void touch_on(uint8_t id){
++    if(id>=12)return;set_pad_active(id,true);set_last_note(get_note_by_id(id));
++    pad_owner[id]=arpeggiator_is_enabled()?2:1;
++    if(pad_owner[id]==2)arpeggiator_pad_on(id,imu_data.acceleration);else note_on(id,imu_data.acceleration);
+     display_request_refresh();
+-#endif
+-}
+-
+-void touch_off(uint8_t id) {
+-    // Clear pad from active set
+-    set_pad_active(id, false);
+-
+-    // Route through arpeggiator if enabled
+-    if (arpeggiator_is_enabled()) {
+-        arpeggiator_pad_off(id);
+-    } else {
+-        note_off(id);
+-    }
+-    
+-#if defined (USE_DISPLAY)
+-    display_request_refresh();
+-#endif
+-}
+-
+-extern "C" void all_notes_off() {
+-    g_synth.all_notes_off();
+-    // Stop arpeggiator if running
+-    arpeggiator_stop();
+-    // Reset chord tracking state
+-    for (uint8_t i = 0; i < 12; i++) {
+-        active_chord_count[i] = 0;
+-        set_pad_active(i, false);  // Clear visual indicator
+-    }
+-}
++}
++
++void touch_off(uint8_t id){
++    if(id>=12)return;set_pad_active(id,false);
++    if(pad_owner[id]==2)arpeggiator_pad_off(id);else if(pad_owner[id]==1)note_off(id);
++    pad_owner[id]=0;display_request_refresh();
++}
++
++void release_live_notes(){
++    for(uint8_t id=0;id<12;id++){note_off(id);notes_release_source(id);pad_owner[id]=0;set_pad_active(id,false);}
++    arpeggiator_stop();notes_release_source(NOTE_SOURCE_ARP);
++}
++extern "C" void all_notes_off(){release_live_notes();notes_panic();g_synth.all_notes_off();}
+ 
+ // Use the IMU to alter parameters according to device tilting
+ void tilt_process() {
+@@ -698,46 +491,13 @@
+     }
+ }
+ 
+-#ifdef DEBUG_CPU_PROFILING
+-// CPU profiling variables (Core1 writes, Core0 reads)
+-static volatile uint32_t cpu_total_us = 0;      // Total processing time
+-static volatile uint32_t cpu_buffer_count = 0;  // Number of buffers processed
+-static volatile uint32_t cpu_max_us = 0;        // Max single buffer time
+-static volatile uint32_t cpu_last_report_ms = 0;
+-// Computed values for display (updated once per second)
+-static volatile uint32_t cpu_avg_percent = 0;
+-static volatile uint32_t cpu_max_percent = 0;
+-
+-// Getter for display to show CPU load (extern "C" for C linkage)
+-extern "C" uint32_t get_cpu_avg_percent(void) { return cpu_avg_percent; }
+-extern "C" uint32_t get_cpu_max_percent(void) { return cpu_max_percent; }
+-#endif
+-
+-static void __not_in_flash_func(i2s_audio_task)(void) {
+-    static int16_t *last_buffer;
+-    int16_t *buffer = sound_i2s_get_next_buffer();
+-    int16_t right_buffer; // Necessary quirk for compatibility with
+-                          // the original PRA32-U code
+-            
+-    if (buffer != last_buffer) { 
+-        last_buffer = buffer;
+-#ifdef DEBUG_CPU_PROFILING
+-        uint32_t start_us = time_us_32();
+-#endif
+-        for (int i = 0; i < AUDIO_BUFFER_LENGTH; i++) {
+-        short sample = g_synth.process(right_buffer);
+-        int temp = (int)sample * get_volume();
+-        short output = (short)(temp >> 3);
+-        *buffer++ = output;
+-        *buffer++ = output;
+-        }
+-#ifdef DEBUG_CPU_PROFILING
+-        uint32_t elapsed_us = time_us_32() - start_us;
+-        cpu_total_us += elapsed_us;
+-        cpu_buffer_count++;
+-        if (elapsed_us > cpu_max_us) cpu_max_us = elapsed_us;
+-#endif
+-    }
++extern "C" uint32_t get_cpu_avg_percent(){
++    synth_diagnostics_t d;synth_get_diagnostics(&d);
++    return d.render_buffers?(uint32_t)(d.render_total_us*100/d.render_buffers/(AUDIO_BUFFER_LENGTH*1000000u/SOUND_OUTPUT_FREQUENCY)):0;
++}
++extern "C" uint32_t get_cpu_max_percent(){
++    synth_diagnostics_t d;synth_get_diagnostics(&d);
++    return d.max_render_us*100/(AUDIO_BUFFER_LENGTH*1000000u/SOUND_OUTPUT_FREQUENCY);
+ }
+ 
+ int64_t power_on_complete(alarm_id_t id, void *) {
+@@ -772,18 +532,19 @@
+         break;
+         case CTX_KEY:
+             // D#7 is the highest note that can be set as root note
++            release_live_notes();
+             set_key_up();
+-            all_notes_off();
+         break;
+         case CTX_SCALE:
++            release_live_notes();
+             set_scale_up();
+-            all_notes_off();
+         break;
+         case CTX_INSTRUMENT:
+             set_instrument_up();
+             update_instrument();
+         break;
+         case CTX_CHORD:
++            release_live_notes();
+             set_chord_mode_up();
+             // Force polyphonic mode for chord support
+             if (get_chord_mode() != CHORD_OFF) {
+@@ -791,6 +552,7 @@
+             }
+         break;
+         case CTX_ARP_PATTERN:
++            release_live_notes();
+             set_arp_pattern_up();
+         break;
+         case CTX_ARP_SPEED:
+@@ -880,18 +642,19 @@
+ #endif
+         break;
+         case CTX_KEY:
++            release_live_notes();
+             set_key_down();
+-            all_notes_off();
+         break;
+         case CTX_SCALE:
++            release_live_notes();
+             set_scale_down();
+-            all_notes_off();
+         break;
+         case CTX_INSTRUMENT:
+             set_instrument_down();
+             update_instrument();
+         break;
+         case CTX_CHORD:
++            release_live_notes();
+             set_chord_mode_down();
+             // Force polyphonic mode for chord support
+             if (get_chord_mode() != CHORD_OFF) {
+@@ -899,6 +662,7 @@
+             }
+         break;
+         case CTX_ARP_PATTERN:
++            release_live_notes();
+             set_arp_pattern_down();
+         break;
+         case CTX_ARP_SPEED:
+@@ -973,7 +737,7 @@
+     long int position = encoder->position / 4; // Adjust the encoder sensitivity here
+     if(last_position != position) {
+         // Set flag for main loop to process (avoid I2C/display calls in interrupt context)
+-        encoder_direction = (last_position < position ? 1 : -1);
++        if(encoder_direction>-128 && encoder_direction<128)encoder_direction += (last_position < position ? 1 : -1);
+     }
+     last_position = position;
+ }
+@@ -1227,19 +991,14 @@
+ 
+ // Secondary core task - handles audio generation
+ // With higher clock speed, single core can handle 4-voice polyphony
+-void core1_main() {
+-    while(true) {
+-        g_synth.secondary_core_process();
+-        i2s_audio_task();
+-    }
+-}
++void core1_main(){synth_audio_main();}
+ 
+ int main() {
+     // Adjust the clock speed to be an even multiplier
+     // of the audio sampling frequency
+     // RP2350 runs at higher clock for 4-voice polyphony on single core
+     // Use SYSTEM_CLOCK_KHZ from config.h - lower if experiencing instability
+-    set_sys_clock_khz(SYSTEM_CLOCK_KHZ, false);
++    if(!set_sys_clock_khz(SYSTEM_CLOCK_KHZ, false))panic("Unsupported system clock");
+     stdio_init_all();
+ 
+     bi_decl_all();
+@@ -1279,7 +1038,7 @@
+ #endif
+ 
+     // Start the audio engine.
+-    sound_i2s_init(&sound_config);
++    // Audio resources and DSP are initialized by core 1.
+ 
+     // Start the synth
+     g_synth.initialize();
+@@ -1292,17 +1051,6 @@
+     set_scale_slot(-1);  // No slot selected
+     set_preset_has_changes(false);
+     set_scale_has_changes(false);
+-
+-    // Allocate memory for the user presets and scales arrays
+-    user_presets = (uint8_t **)malloc(NUM_PRESET_SLOTS * sizeof(uint8_t *));
+-    for (uint8_t i = 0; i < NUM_PRESET_SLOTS; i++) {
+-        user_presets[i] = (uint8_t *)malloc(PROGRAM_PARAMS_NUM * sizeof(uint8_t));
+-    }
+-
+-    user_scales = (uint8_t **)malloc(NUM_SCALE_SLOTS * sizeof(uint8_t *));
+-    for (uint8_t i = 0; i < NUM_SCALE_SLOTS; i++) {
+-        user_scales[i] = (uint8_t *)malloc(12 * sizeof(uint8_t));
+-    }
+ 
+     // Attempt to load previous settings, if stored on flash
+     bool data_loaded = load_flash_data();
+@@ -1387,12 +1135,26 @@
+ #endif
+ 
+     while (true) { // Main loop
++        diagnostics_task();
+         mpr121_task();
++        synth_set_volume(get_volume());
++        persistence_task();
++        synth_diagnostics_t queue_status;synth_get_diagnostics(&queue_status);
++        static uint32_t observed_overflows,observed_midi_overflows;
++        if(queue_status.queue_overflows!=observed_overflows || midi_overflows!=observed_midi_overflows){
++            observed_overflows=queue_status.queue_overflows;observed_midi_overflows=midi_overflows;
++            looper_stop();demo_stop();all_notes_off();synth_request_suspend(false);
++            update_instrument();display_request_refresh();
++        }
+ 
+         // Process deferred encoder events (set from interrupt context)
+         if (encoder_direction != 0) {
+-            int8_t dir = encoder_direction;
+-            encoder_direction = 0;  // Clear flag first to avoid missing events
++            uint32_t irq_state=save_and_disable_interrupts();
++            int32_t dir = encoder_direction;
++            encoder_direction -= dir>0?1:-1;
++            restore_interrupts(irq_state);
++            dir=dir>0?1:-1;
++            //  // Clear flag first to avoid missing events
+             if (dir == 1) {
+                 encoder_down();
+             } else if (dir == -1) {
+@@ -1414,9 +1176,9 @@
+         // Run IMU task if axes control is enabled OR if CHORD_TILT mode needs tilt_zone
+         // Skip IMU polling during demo playback to reduce I2C bus contention
+         // Throttle to 20Hz (50ms) to reduce I2C bus load - human tilt response is ~100-200ms
+-        if((get_imu_axes() > 0 || get_chord_mode() == CHORD_TILT) && !demo_is_playing()) {
+-            static uint32_t last_imu_poll_ms = 0;
+-            uint32_t now_ms = time_us_32() / 1000;
++        if((get_imu_axes() > 0 || get_chord_mode() == CHORD_TILT) && !demo_is_playing() && !DODEPAN_DISABLE_IMU) {
++            static uint64_t last_imu_poll_ms = 0;
++            uint64_t now_ms = time_us_64() / 1000;
+             if (now_ms - last_imu_poll_ms >= 50) {
+                 last_imu_poll_ms = now_ms;
+                 static uint8_t prev_tilt_zone = 4;
+@@ -1443,7 +1205,7 @@
+         // Process any deferred display updates (when I2C was busy during touch/encoder events)
+         // Skip display updates during demo playback if DEBUG_DEMO_NO_DISPLAY is defined
+ #ifdef DEBUG_DEMO_NO_DISPLAY
+-        if(display_is_pending() && !demo_is_playing()) {
++        if(display_is_pending() && !demo_is_playing() && !DODEPAN_DISABLE_IMU) {
+             display_draw(&display);
+         }
+ #else
+@@ -1458,33 +1220,9 @@
+         demo_task();
+ #if defined (USE_MIDI)
+         tud_task(); // tinyusb device task
+-#endif
+-
+-#ifdef DEBUG_CPU_PROFILING
+-        // Update CPU load metrics every second for display
+-        {
+-            uint32_t now_ms = time_us_32() / 1000;
+-            if (now_ms - cpu_last_report_ms >= 1000 && cpu_buffer_count > 0) {
+-                // Calculate timing metrics
+-                // Buffer period = AUDIO_BUFFER_LENGTH / SOUND_OUTPUT_FREQUENCY
+-                // At 64 samples @ 48kHz = 1.333ms per buffer = 1333us
+-                uint32_t buffer_period_us = (AUDIO_BUFFER_LENGTH * 1000000) / SOUND_OUTPUT_FREQUENCY;
+-                uint32_t avg_us = cpu_total_us / cpu_buffer_count;
+-                
+-                // Update global values for display
+-                cpu_avg_percent = (avg_us * 100) / buffer_period_us;
+-                cpu_max_percent = (cpu_max_us * 100) / buffer_period_us;
+-                
+-                // LED feedback: ON if overloaded, OFF otherwise
+-                gpio_put(PICO_DEFAULT_LED_PIN, cpu_max_percent > 90 ? 1 : 0);
+-                
+-                // Reset counters
+-                cpu_total_us = 0;
+-                cpu_buffer_count = 0;
+-                cpu_max_us = 0;
+-                cpu_last_report_ms = now_ms;
+-            }
+-        }
+-#endif
+-    }
+-}
++        midi_output_task();
++#endif
++
++
++    }
++}
+--- pre-repair/state.c
++++ repaired/state.c
+@@ -121,7 +121,7 @@
+ 
+ void set_instrument_up() {
+     uint8_t instrument = get_instrument();
+-    if(instrument < 11 + NUM_PRESET_SLOTS) { instrument++; }
++    if(instrument < INSTRUMENT_COUNT - 1) { instrument++; }
+     set_instrument(instrument);
+ }
+ 
+@@ -153,7 +153,7 @@
+ }
+ 
+ /* Context */
+-uint8_t get_context() {
++context_t get_context() {
+     return state.context;
+ }
+ 
+@@ -162,7 +162,7 @@
+ }
+ 
+ /* Selection */
+-uint8_t get_selection() {
++selection_t get_selection() {
+     return state.selection;
+ }
+ 
+--- pre-repair/touch.c
++++ repaired/touch.c
+@@ -23,39 +23,28 @@
+ }
+ 
+ 
+-// Perform a second pass of debouncing to better deal with long presses
+-static bool debounced_states[12] = {false};
+-static int debounce_counters[12] = {0};
+-static inline bool mpr121_debounce(uint8_t i, bool is_touched) {
+-    if (is_touched) { // Do not filter positive readings
+-            debounced_states[i] = true;
+-            debounce_counters[i] = 0;
+-        } else if (!is_touched && debounced_states[i]) {
+-            debounce_counters[i]++;
+-            if (debounce_counters[i] >= MPR121_DEBOUNCE_THRESHOLD) {
+-                debounced_states[i] = false;
+-                debounce_counters[i] = 0;
+-            }
+-        }
+-
+-    return debounced_states[i];
+-}
+-
++// Fixed-time release filtering is independent of display/USB loop load.
++static uint16_t touched_mask,raw_mask;
++static uint64_t last_poll_us,last_valid_us,started_us,release_since[12];
++bool touch_any_held(void){return raw_mask!=0 || touched_mask!=0;}
+ void mpr121_task(){
+-    bool is_touched;
+-    static bool was_touched[12];
+-    for(uint8_t i=0; i<12; i++) {
+-        mpr121_is_touched(i, &is_touched, &mpr121);
+-        is_touched = mpr121_debounce(i, is_touched);
+-        if (is_touched != was_touched[i]){
+-            if(time_us_32() < 500000) return;  // Ignore readings for half a second,
+-                                               // allowing the MPR121 to calibrate.
+-            if (is_touched){
+-                touch_on(i);
+-            } else {
+-                touch_off(i);
+-            }
+-            was_touched[i] = is_touched;
++    uint64_t now=time_us_64();if(now-last_poll_us<2000)return;last_poll_us=now;
++    if(!started_us)started_us=now;
++    uint8_t reg=0,data[2];
++    bool valid=i2c_write_timeout_us(MPR121_I2C_PORT,MPR121_ADDRESS,&reg,1,true,2000)==1 &&
++               i2c_read_timeout_us(MPR121_I2C_PORT,MPR121_ADDRESS,data,2,false,2000)==2;
++    if(valid){raw_mask=((uint16_t)data[0]|((uint16_t)data[1]<<8))&0xfff;last_valid_us=now;}
++    else if(now-last_valid_us<100000)return;
++    else raw_mask=0;
++    if(now-started_us<500000)return;
++    for(uint8_t i=0;i<12;i++){
++        uint16_t bit=1u<<i;
++        if(raw_mask&bit){
++            release_since[i]=0;
++            if(!(touched_mask&bit)){touched_mask|=bit;touch_on(i);}
++        }else if(touched_mask&bit){
++            if(!release_since[i])release_since[i]=now;
++            if(now-release_since[i]>=TOUCH_RELEASE_MS*1000u){touched_mask&=~bit;release_since[i]=0;touch_off(i);}
+         }
+     }
+-}+}
+--- pre-repair/touch.h
++++ repaired/touch.h
+@@ -7,6 +7,7 @@
+ #endif
+ 
+ void mpr121_i2c_init();
++bool touch_any_held(void);
+ void mpr121_task();
+ 
+ extern void touch_on(uint8_t id);

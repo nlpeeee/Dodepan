@@ -1,0 +1,12 @@
+FAIL preset-slot-first: instrument 14 must load user slot 0
+FAIL preset-slot-third: instrument 16 must load valid user slot 2, not sentinel slot 4
+FAIL preset-menu-range: all four user instruments must be reachable
+FAIL preset-store-selection: saving slot 0 selects user instrument 14
+FAIL held-mode-routing: release must reach the owner that handled the press
+FAIL tilt-release: tilt transition balances every synth note-on
+FAIL tilt-midi-release: tilt transition balances every external MIDI note-on
+FAIL tilt-looper-release: tilt transition records matching looper releases
+FAIL panic-tilt-tracking: panic clears held tilt pads so movement cannot restart notes
+FAIL panic-midi: panic releases notes previously sent to external MIDI
+FAIL flash-scale-validation: invalid persisted scale degree is rejected before applying state
+RESULT 11 checks, 11 failures

@@ -1,0 +1,1 @@
+unit,firmware_sha256,variant,power,usb,volume,instrument,reproduction,duration_minutes,lrclk_hz,bclk_hz,max_render_us,underruns,late_publications,irq_misses,queue_loss,midi_loss,save_test,stuck_notes,crackling,log_path,recording_path,notes

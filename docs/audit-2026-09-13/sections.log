@@ -1,0 +1,32 @@
+E:\PICO\dodepan\Dodepan\build-audit\firmware\Dodepan_RP2350.elf  :
+section                  size        addr
+.text                   71980   268435456
+.rodata                817820   268507440
+.ARM.exidx                  8   269325260
+.binary_info              100   269325268
+.ram_vector_table         272   536870912
+.uninitialized_data         0   536871184
+.data                  172392   536871184
+.tdata                      0   537043576
+.tbss                       0   537043576
+.bss                   143528   537043576
+.heap                    2048   537187104
+.scratch_x                  0   537395200
+.scratch_y                  0   537399296
+.stack1_dummy            2048   537395200
+.stack_dummy             2048   537399296
+.flash_end                 20   269497760
+.ARM.attributes            52           0
+.comment                   69           0
+.debug_info            552990           0
+.debug_abbrev           59984           0
+.debug_loclists        361595           0
+.debug_aranges           8304           0
+.debug_rnglists         71796           0
+.debug_line            351715           0
+.debug_str              89170           0
+.debug_frame            24516           0
+.debug_line_str           673           0
+Total                 2733128
+
+

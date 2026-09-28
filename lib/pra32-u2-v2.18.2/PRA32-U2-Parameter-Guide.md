@@ -1,0 +1,352 @@
+# Digital Synth PRA32-U2 Parameter Guide v2.18.2
+
+- 2026-08-11 ISGK Instruments
+- <https://github.com/risgk/digital-synth-pra32-u2>
+
+## Control Change Parameters
+
+- Notes
+    - $2 : Disabled if Osc 1 Wave is Tri (Triangle Wave)
+- Osc 1 Wave [Saw|Sqr|Tri|Sin|WT|Pls]
+    - 0 (0-12): Saw Wave
+    - 25 (13-38): Square Wave
+    - 51 (39-63): Triangle Wave
+    - 76 (64-88): Sine Wave
+    - 102 (89-114): Wave Tables with Constraints
+    - 127 (115-127): Pulse Wave
+- Mixer Noise/Sub Osc [N|S]
+    - -63 (1): Noise 100% (min)
+    - -62 (2): Noise 96.9%
+    - -63 (3): Noise 95.3%
+    - -1 (63): Noise 1.6%
+    - +0 (64): 0%
+    - +1 (65): Sub Osc 1.6%
+    - +61 (125): Sub Osc 95.3%
+    - +62 (126): Sub Osc 96.9%
+    - +63 (127): Sub Osc 100% (max)
+- Osc 1 Shape $2
+    - Saw Wave: Multi Saw Detune
+    - Square Wave: Sync Square Pitch
+    - Sine Wave (Frequency Modulation or Phase Modulation): Modulation Depth
+    - Wave Tables with Constraints: Position
+    - Pulse Wave (= 1st Saw + Phase Shifted 2nd Saw)
+        - 0: Pulse Width 50%, or 2nd Saw Phase 50%
+        - 1: Pulse Width 49.6%, or 2nd Saw Phase 50.4%
+        - 64: Pulse Width 25%, or 2nd Saw Phase 75%
+        - 96: Pulse Width 12.5%, or 2nd Saw Phase 87.5%
+        - 126: Pulse Width 0.8%, or 2nd Saw Phase 99.2%
+        - 127: Pulse Width 0%, or 2nd Saw Phase 100%
+- Osc 1 Morph $2
+    - Saw Wave:
+        - 0: Normal Saw 100% (min)
+        - 64: Normal Saw 50% + Multi Saw 50%
+        - 127: Multi Saw 100% (max)
+    - Square Wave:
+        - 0: Normal Square 100% (min)
+        - 64: Normal Square 50% + Sync Square 50%
+        - 127: Sync Square 100% (max)
+    - Sine Wave (Frequency Modulation or Phase Modulation): Frequency Ratio of Modulator
+        - 0 (0-1): Ratio 0.5 (min)
+        - 4 (2-5): Ratio 1.0
+        - 8 (6-9): Ratio 1.5
+        - 12 (10-13): Ratio 2.0
+        - 20 (18-21): Ratio 3.0
+        - 28 (26-29): Ratio 3.5
+        - 108 (106-109): Ratio 14.0
+        - 124 (122-125): Ratio 16.0
+        - 127 (126-127): Ratio 16.5 (max)
+    - Wave Tables with Constraints
+        - 0 (0-12): Wave Table 0 (Sync Pulse 1/8)
+        - 25 (13-38): Wave Table 1 (Sync Pulse 1/4)
+        - 51 (39-63): Wave Table 2 (Serial Sync 8/3)
+        - 76 (64-88): Wave Table 3 (Sync & Ring)
+        - 102 (89-114): Wave Table 4 (8+0 to 0+8)
+        - 127 (115-127): Wave Table 5 (6+0 to 0+10)
+    - Pulse Wave
+        - 0: Pulse 100% = Saw 100% + Reverse Saw 100% (min)
+        - 32: Pulse 50% + Saw 50% = Saw 100% + Reverse Saw 50%
+        - 64: Saw 100%
+        - 96: Saw 100% + Saw 50%
+        - 127: Saw 100% + Saw 100% (max)
+- Osc 2 Wave [Saw|Sqr|Tri|Sin|O1|Nos]
+    - 0 (0-12): Saw Wave
+    - 25 (13-38): Square Wave
+    - 51 (39-63): Triangle Wave
+    - 76 (64-88): Sine Wave
+    - 102 (89-114): Same as Osc 1 Wave
+        - Saw Wave
+        - Square Wave
+        - Triangle Wave
+        - Sine Wave
+        - Square Wave
+        - Square Wave
+    - 127 (115-127): White Noise
+- Mixer Osc Mix [1|2]
+- Osc 2 Coarse [-|+]
+    - -60 (4): -60 semitone (min)
+    - +60 (124): +60 semitone (max)
+- Osc 2 Pitch [-|+]
+    - -55 (9): -12 semitone (min)
+    - -41 (23): -5 semitone
+    - -33 (31): -1 semitone
+    - -32 (32): -50 cent
+    - -1 (63): -1.5625 cent
+    - +0 (64): +0 cent
+    - +1 (65): +1.5625 cent
+    - +32 (96): +50 cent
+    - +33 (97): +1 semitone
+    - +45 (109): +7 semitone
+    - +55 (119): +12 semitone (max)
+- Filter Cutoff
+    - 0: f = 13.0 Hz (min)
+    - 61: f = 440 Hz
+    - 64: f = 523.3 Hz
+    - 121: f = 14080 kHz
+    - 124: f = 16744.0 Hz
+    - 127: f = 19912.1 Hz (max)
+- Filter Resonance
+    - 0: Q = 0.7 (min)
+    - 16 (15-16): Q = 1.0
+    - 32 (31-32): Q = 1.4
+    - 48 (47-48): Q = 2.0
+    - 64 (63-64): Q = 2.8
+    - 80 (79-80): Q = 4.0
+    - 96 (95-96): Q = 5.7
+    - 112 (111-112): Q = 8.0
+    - 127: Q = 11.3 (max)
+- Filter EG Amt [-|+], LFO Filter Amt [-|+]
+    - -60 (4): -120 (min)
+    - +60 (124): +120 (max)
+- Filter Key Track [-|+]
+    - 0 (0-3): -1.000 (min)
+    - 8 (4-11): -0.875
+    - 16 (12-19): -0.750
+    - 24 (20-27): -0.625
+    - 32 (28-35): -0.500
+    - 40 (36-43): -0.375
+    - 48 (44-51): -0.250
+    - 56 (52-59): -0.125
+    - 64 (60-67): +0.000
+    - 72 (68-75): +0.125
+    - 80 (76-83): +0.250
+    - 88 (84-91): +0.375
+    - 96 (92-99): +0.500
+    - 104 (100-107): +0.625
+    - 112 (108-115): +0.750
+    - 120 (116-123): +0.875
+    - 127 (124-127): +1.000 (max)
+- EG Attack, Amp Attack
+    - 0: 0.7 ms
+    - 32: 6.5 ms
+    - 64: 65 ms
+    - 96: 650 ms
+    - 127: 6.0 s
+- EG Decay, Amp Decay
+    - 0: 2 ms
+    - 32: 20 ms
+    - 64: 200 ms
+    - 96: 2 s
+    - 126: 17.3 s
+    - 127: No Decay
+- EG Release, Amp Release
+    - 0: 2 ms
+    - 32: 20 ms
+    - 64: 200 ms
+    - 96: 2 s
+    - 126: 17.3 s
+    - 127: 18.6 s
+- EG Mod Amt [-|+], LFO Mod Amt [-|+]
+    - Pitch
+        - -63 (1): -10 oct (min)
+        - -62 (2): -8 oct
+        - -61 (3): -6 oct
+        - -60 (4): -5 oct
+        - -59 (5): -4 oct
+        - -58 (6): -3.5 oct
+        - -57 (7): -3 oct
+        - -56 (8): -2.5 oct
+        - -55 (9): -24 semitone
+        - -43 (21): -12 semitone
+        - -33 (31): -2 semitone
+        - -32 (32): -100 cent
+        - -1 (63): -3.125 cent
+        - +0 (64): +0 cent
+        - +1 (65): +3.125 cent
+        - +32 (96): +100 cent
+        - +33 (97): +2 semitone
+        - +43 (107): +12 semitone
+        - +55 (119): +24 semitone
+        - +56 (120): +2.5 oct
+        - +57 (121): +3 oct
+        - +58 (122): +3.5 oct
+        - +59 (123): +4 oct
+        - +60 (124): +5 oct
+        - +61 (125): +6 oct
+        - +62 (126): +8 oct
+        - +63 (127): +10 oct (max)
+    - Shape
+        - -63 (1): Shape -256 (min)
+        - -62 (2): Shape -248
+        - -61 (3): Shape -244
+        - -1 (63): Shape -4
+        - +0 (64): Shape +0
+        - +1 (65): Shape +4
+        - +61 (125): Shape +244
+        - +62 (126): Shape +248
+        - +63 (127): Shape +256 (max)
+    - Cutoff
+        - -60 (4): -120 (min)
+        - +60 (124): +120 (max)
+- EG Mod Dst [P|P|2P|2P|F|1S], LFO Mod Dst [P|P|2P|2P|F|1S]
+    - 0 (0-12): Osc 1 & 2 Pitch
+    - 25 (13-38): Osc 1 & 2 Pitch
+    - 51 (39-63): Osc 2 Pitch
+    - 76 (64-88): Osc 2 Pitch
+    - 102 (89-114): Filter Cutoff
+    - 127 (115-127): Osc 1 Shape
+- Voice Mode [Pol|Pol|Mon|Mon|LP|Lgt]
+    - 0 (0-12): Polyphonic (LFO Single Trigger)
+    - 25 (13-38): Polyphonic (LFO Single Trigger)
+    - 51 (39-63): Monophonic (EG & LFO Multi Trigger)
+    - 76 (64-88): Monophonic (EG & LFO Multi Trigger)
+    - 102 (89-114): Legato Portamento (Monophonic, EG & LFO Single Trigger, Auto Portamento)
+    - 127 (115-127): Legato (Monophonic, EG & LFO Single Trigger)
+- Portamento
+    - 0: Portamento Time 0 ms
+    - 1: Portamento Time 1.1 ms
+    - 64: Portamento Time 100 ms
+    - 127: Portamento Time 9.3 s
+- LFO Wave [Tri|Sin|Nos|Saw|S&H|Sqr]
+    - 0 (0-12): Triangle Wave (Key Trigger Off, -0.5 to +0.5)
+    - 25 (13-38): Sine Wave (Key Trigger Off, -0.5 to +0.5)
+    - 51 (39-63): Red Noise (Key Trigger Off, -0.5 to +0.5)
+    - 76 (64-88): Saw Wave (Key Trigger On, -0.5 to +0.5)
+    - 102 (89-114): Sample & Hold (Key Trigger On, -0.5 to +0.5)
+    - 127 (115-127): Square Wave (Key Trigger On, 0.0 to 1.0)
+- LFO Fade Time
+    - 0: 0 ms (min)
+    - 1: 9.6 ms
+    - 64: 1.0 s
+    - 127: 9.6 s (max)
+- LFO Rate
+    - 0: 0.0 Hz (min)
+    - 1: 0.072 Hz
+    - 64: 2.7 Hz
+    - 80: 6.9 Hz
+    - 127: 103.8 Hz (max)
+- LFO Depth
+    - 0: 0% (min)
+    - 1: 10.8%
+    - 64: 50%
+    - 125: 97.7%
+    - 126: 98.5%
+    - 127: 100% (max)
+        - NOTE: The actual LFO depth is the "LFO Depth" value plus the "Modulation" value and the after touch effect
+- Amp Gain
+- Filter Mode [LP|HP]
+    - 0 (0-63): Low Pass
+    - 127 (64-127): High Pass
+- Pitch Bend Range
+    - 0: 0 semitone (min)
+    - 60: 60 semitone (max)
+- EG Amp Mod [Off|On]
+    - 0 (0-63): Off
+    - 127 (64-127): On
+- Release = Decay [Off|On]
+    - 0 (0-63): Off
+    - 127 (64-127): On, EG Release = EG Decay and Amp Release = Amp Decay
+- EG Att/Dec Velo Sens [-|+]: EG Attack/Release Velocity Sensitivity, Modulates the attack/decay times by note on velocity
+    - -64 (0): -100% (+63 to -63)
+    - -32 (31-32): -50% (+31.5 to -31.5)
+    - +0 (63-64): +0% (-0 to +0)
+    - +32 (95-96): +50% (-31.5 to +31.5)
+    - +63 (127): +100% (-63 to +63)
+- EG Rel Velo Sens [-|+]: EG Release Velocity Sensitivity, Modulates the release time by note off velocity
+    - -64 (0): -100% (+63 to -63)
+    - -32 (31-32): -50% (+31.5 to -31.5)
+    - +0 (63-64): +0% (-0 to +0)
+    - +32 (95-96): +50% (-31.5 to +31.5)
+    - +63 (127): +100% (-63 to +63)
+- EG Level Velo Sens: EG Level Velocity Sensitivity, Decreases the EG level as note on velocity decreases
+- Amp Level Velo Sens: Amp Level Velocity Sensitivity, Decreases the Amp EG level as note on velocity decreases
+- EG Att/Dec Key Track [-|+]: Modulates the attack/decay times based on oscillator pitch at note-on
+    - -64 (0): Delta Value = -12 / octave (Delta Second = 0.42x / octave)
+    - -52 (11-12): Delta Value = -9.75 / octave (Delta Second = 0.50x / octave)
+    - -32 (31-32): Delta Value = -6 / octave (Delta Second = 0.65x / octave)
+    - +0 (63-64): Delta Value = +0 / octave (Delta Second = 1x / octave)
+    - +32 (95-96): Delta Value = +6 / octave (Delta Second = 1.54x / octave)
+    - +52 (115-116): Delta Value = +9.75 / octave (Delta Second = 2.02x / octave)
+    - +63 (127): Delta Value = +12 / octave (Delta Second = 2.37x / octave)
+- Voice Assign Mode [1|1|3|3|4|2]: In Polyphonic Mode,
+    - 0 (0-12): Mode 1, Free voice with next number has priority (Round Robin), Release is effective
+    - 25 (13-38): Mode 1, Free voice with next number has priority (Round Robin), Release is effective
+    - 51 (39-63): Mode 3, Reuse note-off voices, Free voice with next number has priority (Round Robin), Release and polyphonic after touch are effective
+    - 76 (64-88): Mode 3, Reuse note-off voices, Free voice with next number has priority (Round Robin), Release and polyphonic after touch are effective
+    - 102 (89-114): Mode 4, Reuse note-off voices, Free voice with small number has priority, Portamento and polyphonic after touch are effective
+    - 127 (115-127): Mode 2, Free voice with small number has priority, Portamento is effective
+- Pan
+- Stretch Tune [-|+]
+    - 0: +0 cent at note number 108 (-0 cent at note number 12)
+    - 32: +9.4 cent at note number 108 (-9.4 cent at note number 12)
+    - 64: +18.8 cent at note number 108 (-18.8 cent at note number 12)
+    - 127: +37.2 cent at note number 108 (-37.2 cent at note number 12)
+- Osc Drift
+- Osc Saw Wave Mode [Str|Cur]
+    - 0 (0-63): Straight Saw Wave
+    - 127 (64-127): Curved Saw Wave, This does not affect the Pulse Wave
+- Coarse Tune [-|+]
+    - -64 (0): -64 semitone
+    - -1 (63): -1 semitone
+    - +0 (64): +0 semitone
+    - +1 (65): +1 semitone
+    - +63 (127): +63 semitone
+- Fine Tune [-|+]
+    - -64 (0): -100 cent
+    - -1 (63): -1.5625 cent
+    - +0 (64): +0 cent
+    - +1 (65): +1.5625 cent
+    - +63 (127): +98.4375 cent
+- Breath Filter Amt [-|+]
+    - -60 (4): -120 (min)
+    - +60 (124): +120 (max)
+- Breath Amp Mod [Off|Qad|Lin]
+    - 0 (0-31): Off
+    - 64 (32-95): Quadratic Curve
+    - 127 (96-127): Liniear Curve
+- After Touch LFO Amt
+- Chorus Level: Chorus Send Level
+- Chorus Rate
+    - 0: LFO Frequency 0.012 Hz (min)
+    - 64: LFO Frequency 0.48 Hz
+    - 127: LFO Frequency 18.4 Hz (max)
+- Chorus Depth
+    - 0: Delay Time +/- 0 ms (min)
+    - 32: Delay Time +/- 1.3 ms
+    - 64: Delay Time +/- 2.7 ms
+    - 126: Delay Time +/- 5.3 ms (max)
+- Delay Level: Delay Send Level
+- Delay Mode [S|P]
+    - 0 (0-63): Stereo Delay
+    - 127 (64-127): Ping Pong Delay
+- Delay Time
+    - 0: 1 ms (min)
+    - 5: 6 ms
+    - 6: 8 ms
+    - 7: 10 ms
+    - 12: 20 ms
+    - 27: 50 ms
+    - 42: 100 ms = eighth note time at 300 BPM
+    - 57: 150 ms = eighth note time at 200 BPM
+    - 62: 166.7 ms = eighth note time at 180 BPM
+    - 63: 170 ms
+    - 64: 173.3 ms
+    - 72: 200 ms = eighth note time at 150 BPM
+    - 87: 250 ms = eighth note time at 120 BPM
+    - 93: 270 ms
+    - 102: 300 ms = eighth note time at 100 BPM
+    - 112: 333.3 ms
+    - 114: 340 ms (max)
+- Delay Feedback
+    - 0: Feedback 0% (min)
+    - 64: Feedback 25%
+    - 127: Feedback 49.6% (max)

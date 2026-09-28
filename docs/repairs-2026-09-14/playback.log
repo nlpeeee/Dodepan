@@ -1,0 +1,31 @@
+PASS loop-normal: note-off inside the loop is delivered
+PASS loop-boundary: note-off exactly at loop end must precede restart
+PASS loop-late-task: late task must drain note-off before wrapping
+PASS loop-pause: pausing playback releases its sounding notes
+PASS loop-limit-idle: 20-second recording limit works without further events
+PASS loop-capacity: capacity exhaustion cannot discard a required release
+PASS loop-paused-release: release after pause must not erase recording and re-arm
+PASS arp-gate: 80-percent gate emits a release
+PASS arp-disable: disabling arpeggiator releases current note
+PASS arp-octave-change: reducing octave range does not underflow note calculation
+PASS arp-clock-wrap: microsecond-clock wrap must not trigger an early gate/step
+PASS arp-pad-release: releasing last held pad stops the arpeggio
+PASS demo-tempo: tempo changes integrate elapsed time piecewise
+PASS demo-stop: demo stop reaches stopped state and releases sink
+PASS demo-restart: restart resets the embedded-song parser
+PASS demo-zero-division: zero ticks per quarter is rejected
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-asset: embedded song terminates and releases notes within ten minutes
+PASS demo-source-stop: demo stop preserves another source on the same pitch
+PASS shared-last-off: final owner releases shared pitch
+PASS demo-truncated: all truncated fixture lengths are rejected
+PASS demo-vlq-bound: five-byte delta is rejected
+PASS loop-long-gap: large delay resynchronizes and stop releases playback
+RESULT 30 checks, 0 failures

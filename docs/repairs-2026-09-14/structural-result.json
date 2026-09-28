@@ -1,0 +1,22 @@
+{
+  "parameter_declared_count": 48,
+  "parameter_actual_count": 48,
+  "omitted_parameters": [],
+  "legacy_flash_bytes": 244,
+  "full_parameter_flash_bytes": 256,
+  "pio_cycles_per_frame": 64,
+  "pio_bits_per_frame": 32,
+  "configured_hz": 48000,
+  "calculated_lrclk_hz": 48000.0,
+  "calculated_bclk_hz": 1536000.0,
+  "configured_buffer_us": 2666.6666666666665,
+  "calculated_buffer_us": 2666.6666666666665,
+  "local_changes_from_v1.6.0": [
+    "Digital-Synth-PRA32-U2/pra32-u2-synth.h"
+  ],
+  "missing_from_local": [],
+  "pins": {
+    "v1.6.0": "60040e7a41f391bf60805afaecfa503a45954414",
+    "v2.18.2": "ad082d08d825e979023f1dc7cae9f6a0dab45af5"
+  }
+}

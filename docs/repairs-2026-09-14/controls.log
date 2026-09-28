@@ -1,0 +1,14 @@
+PASS held live release retains original owner
+PASS held arp release retains original owner
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt preserves held root
+PASS tilt notes and recorded events balance
+PASS held mode change releases without new onset
+PASS upper pitch chord remains balanced

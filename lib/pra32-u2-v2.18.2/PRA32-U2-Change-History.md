@@ -1,0 +1,403 @@
+## Digital Synth PRA32-U2 Change History
+
+- v2.18.2 (2026-08-11):
+    - PRA32-U2/P: Fix the initial page to "A-10 Filter a"
+    - Tested with Arduino-Pico version 6.0.0
+- v2.18.1 (2026-08-10):
+    - Fix Key Track of Filter/EG to be affected by Coarse/Fine/Stretch Tune
+    - Fix Stretch Tune to not be affected by EG pitch modulation
+    - Tested with Arduino-Pico version 6.0.0
+- v2.18.0 (2026-08-10):
+    - Add "Stretch Tune [-|+]" (Default: +16)
+    - Modify the factory presets
+    - Add "EG Att/Dec Velo Sens [-|+]"
+    - Change "EG Release Off Velo Sens" to "EG Rel Velo Sens [-|+]"
+    - Add "EG Att/Dec Key Track [-|+]"
+    - Fix Velo Sens behaviour in Voice Mode Mon (Monophonic)
+    - Fix EG Release behaviour
+    - Fix "pra32-u2-prog-factory-presets.json"
+    - PRA32-U2 Editor: Rename the factory presets
+    - PRA32-U2 Editor: Change the layout
+    - Improve the code
+    - Improve performance
+    - Fix documentation
+    - Tested with Arduino-Pico version 6.0.0
+- v2.17.0 (2026-08-02):
+    - Change "EG Amp Mod" to use EG output instead of Amp EG output (not Amp ADSR = EG ADSR)
+    - Rename "EG/Amp Velocity Sensitivity" to "EG/Amp Level Velo Sens"
+    - Change "Release Off Velocity Sensitivity" to "EG Release Off Velo Sens"
+    - PRA32-U2/P: Change the initial values of "Seq Pitch 0/1/2/3"
+    - Improve the code
+    - Improve documentation
+    - Tested with Arduino-Pico version 6.0.0
+- v2.16.0 (2026-07-17):
+    - Increase the I2S DAC bit depth to **24 bits**
+    - **Change** the control number of After Touch LFO Amt from 109 to 37
+    - Add Coarse Tune and Fine Tune parameters
+    - Add Voice Assign Mode 3 and 4, and **change** the default from Mode 1 to 3
+    - **Rename** "Release Velocity Sensitivity" to "Release Off Velocity Sensitivity"
+    - PRA32-U2 Editor: Adjust the layout
+    - PRA32-U2/P: Increase `PRA32_U2_KEY_ANTI_CHATTERING_WAIT`
+    - PRA32-U2/P: **Change** the Seq Tempo range from 56-300 to 30-240 BPM
+    - Add `SoftwareSerial` explanation to README
+    - Improve customizability
+    - Fix documentation
+    - Tested with Arduino-Pico version 5.6.1
+- v2.15.0 (2026-06-28):
+    - Adding the "Release Velocity Sensitivity" parameter
+    - Treat Note On with velocity 0 as Note Off with velocity 64
+    - Fix the default program when the basic channel is not 1
+    - PRA32-U2/M: Fix the current synth (MIDI channel) "$" display
+    - Revert "Fix Note On with velocity 0 not treated as Note Off"
+        - This fix was not needed
+    - Tested with Arduino-Pico version 5.6.1
+- v2.14.2 (2026-06-16):
+    - Fix Note On with velocity 0 not treated as Note Off
+    - Tested with Arduino-Pico version 5.6.0
+- v2.14.1 (2026-05-13):
+    - Fix the "EG Mod Dst [P|P|2P|2P|F|1S]"
+    - Reset Osc and LFO phase on All Sound Off
+    - Rename the Preset #27 "El Organ" to "Elec Organ"
+    - Improve the code for smoothing
+    - Fix the MIDI Implementation Chart
+    - Tested with Arduino-Pico version 5.6.0
+- v2.14.0 (2026-05-09):
+    - Change the smoothing method for oscillator shape modulation
+    - Increase the smoothing speed for filter cutoff modulation
+    - Change the programs #0-15 to user presets and #16-31 to factory presets
+    - Improve "All Sound OFF" behavior
+    - Reduce CPU usage in monophonic modes
+    - PRA32-U2/M: Enable polyphonic mode for Basic Channel + 0 (Main Synth)
+        - Sub Synths are processed only if Main Synth is in monophonic modes
+    - PRA32-U2/M: Change the default programs from #4-7 to #0-3
+    - PRA32-U2/M: All Sound Off when switching to/from Multi-Timbral mode
+    - PRA32-U2/M: Officially support **PRA32-U2/M** (PRA32-U2 Multi-Timbre Edition) and **PRA32-U2/M/P**
+    - Improve customizability
+    - Improve the code
+    - Tested with Arduino-Pico version 5.6.0
+- v2.13.0 (2026-05-02):
+    - **Enable UART MIDI by default**
+        - GP4 and GP5 pins are used by UART1 TX and UART1 RX
+    - Change the pin mode for PRA32_U2_UART_MIDI_RX_PIN and RA32_U2_DEBUG_PRINT_RX_PIN to INPUT_PULLUP
+    - Change the smoothing method for oscillator shape control and filter cutoff modulation
+    - Modify the Preset "#14 Synth Bass"
+    - Improve performance using the RP2350 **Hardware Interpolators**
+    - PRA32-U2/M: Change the MIDI channels for layering
+    - PRA32-U2/M: In Basic Channel + 3, Osc 1 Shape and Morph are enabled in Saw, Sqr, and WT
+    - PRA32-U2 Editor: Add the "Send Current" button; Stop sending Control Change on MIDI Out change
+    - PRA32-U2 Editor: Change the layout
+    - Improve documentation
+    - Tested with Arduino-Pico version 5.6.0
+- v2.12.0 (2026-04-11):
+    - PRA32-U2/M: Add MIDI channels for layering
+    - PRA32-U2/M: In Basic Channel + 3, Osc 1 Shape and Morph are disabled in Saw
+    - PRA32-U2/M: Use a different seed for the noise generator for each channel
+    - Improve customizability
+    - Improve the code
+    - Waveshare Pico-Audio Rev2.1 Version is CURRENTLY NOT RECOMMENDED
+        - NOTE: No sound unless using Arduino-Pico 4.4.0
+    - Tested with Arduino-Pico version 5.5.1
+- v2.11.0 (2026-03-29):
+    - Modify the Presets and the Editor Presets for Mono
+    - Change the behavior of the "Same as Osc 1 Wave (O1)" in the "Osc 2 Wave"
+    - PRA32-U2/M: Add "Digital-Synth-PRA32-U2-M-Pimoroni-Pico-Audio-Pack.uf2"
+    - Tested with Arduino-Pico version 5.5.1
+- v2.10.0 (2026-03-28):
+    - Smooth out changes of the "Osc 1 Shape" and the "Filter Cutoff"
+    - Modify the Presets and the Editor Presets
+    - Fix an issue where modulation stop working when LFO Depth and Modulation are 127
+    - Fix pra32-u2-make-sample-wav-file
+    - Tested with Arduino-Pico version 5.5.1
+- v2.9.0 (2026-03-26):
+    - Modify the Presets and the Editor Presets
+    - PRA32-U2/M: Increase the output level
+    - PRA32-U2/M: Change the default programs from #0-3 to #4-7
+    - PRA32-U2/M: Change the phases of the Multi Saw for each channel
+    - PRA32-U2/M: In Basic Channel + 3, Osc 1 Shape and Morph are enabled in Saw
+    - PRA32-U2/M/P: Fix an issue where the MIDI channel for panel operations is over 16
+    - PRA32-U2/M/P: Fix an issue where "Seq Rand Pitch" and "Seq Rand Velo" sometimes do not work
+    - Tested with Arduino-Pico version 5.5.1
+- v2.8.0 (2026-03-20):
+    - Add the PRA32-U2/M (PRA32-U2 Multi-Timbre Edition) option (Experimental)
+    - PRA32-U2/P: Change the USB device name to "Digital Synth PRA32-U2/P"
+    - PRA32-U2/P: Rename "Panel MIDI Ch" to "MIDI Basic Ch"
+    - Improve the code
+    - Improve customizability
+    - Tested with Arduino-Pico version 5.5.1
+- v2.7.2 (2026-03-14):
+    - Fix a performance issue
+    - Tested with Arduino-Pico version 5.5.1
+- v2.7.1 (2026-03-14):
+    - Improve customizability
+    - Tested with Arduino-Pico version 5.5.1
+- v2.7.0 (2026-03-11):
+    - Fix the behavior of the "Portamento"
+    - Change the Presets and the Editor Presets overall
+        - #12 Fifth Lead -> Saw Lead
+        - #132 Saw Lead -> Fifth Lead
+    - Smooth the change of the "Mixer Osc Mix"
+    - Tested with Arduino-Pico version 5.5.1
+- v2.6.0 (2026-03-08):
+    - Change the "EG/LFO Mod Dst" choices from "[P|F|2P|2P|1S|1S]" to "[P|P|2P|2P|F|1S]"
+    - Extend the frequency change cycle of the "Osc Drift"
+    - Increase the "Osc Drift" of the Presets and the Editor Presets
+        - From 32 to 48
+    - Change the "Mixer Osc Mix" of the Presets and the Editor Presets
+    - Tested with Arduino-Pico version 5.5.1
+- v2.5.2 (2026-03-06):
+    - Decrease the "Osc Drift" of the Presets and the Editor Presets
+        - From 64 to 32
+    - Tested with Arduino-Pico version 5.5.1
+- v2.5.1 (2026-03-06):
+    - Decrease the "Osc Drift" of the Presets and the Editor Presets
+    - Tested with Arduino-Pico version 5.5.1
+- v2.5.0 (2026-03-06):
+    - Add the "Osc Drift" parameter
+        - Initial: 127
+    - Add the "Osc Saw Wave Mode" parameter
+        - Initial: 127 (Curved Saw Wave)
+    - Change the Chorus FX and the Delay FX to apply LPF to the delay component
+    - Modify the Presets and the Editor Presets
+    - Optimize processing of the Osc and the EG
+    - Other improvements
+    - Tested with Arduino-Pico version 5.5.1
+- v2.4.0 (2026-02-23):
+    - Change the minimum effective "Filter Cutoff" value from 16 (f = 32.7 Hz) to 0 (f = 13.0 Hz)
+    - PRA32-U2 Editor: Rename "Random Synth/FX" to "Randomize Synth/FX Prms"
+    - Tested with Arduino-Pico version 5.5.0
+- v2.3.0 (2026-02-14):
+    - PRA32-U2/P: Change the execution method for various operations
+        - Old: Change the value from 0-63 [Rdy] to 64-127 [Exe]
+        - New: Change the value from 0-32 [Rdy] to 96-127 [Exe]
+    - PRA32-U2/P: Change the Prog -/+ Keys to function with long-pressing (or Shift + pushing) instead of pushing
+    - MIDI Implementation Chart: Fix the default Program number from 8 to 0
+    - Tested with Arduino-Pico version 5.5.0
+- v2.2.0 (2026-02-07):
+    - **Fix the EG/Amp Decay behavior**
+    - Fix the EG/Amp Attack behavior when the "EG/Amp Velocity Sensitivity" value is greater than 0
+    - Add the "Red Noise (Nos)" to the "LFO Wave"
+    - Improve the code
+    - Tested with Arduino-Pico version 5.5.0
+- v2.1.0 (2026-02-01):
+    - Increase the Q values corresponding to the "Filter Resonance" control values
+        - The new Q value range is from 0.7 to 11.3
+    - Add the "Same as Osc 1 Wave (O1)" to the "Osc 2 Wave"
+    - Add the "Pan" parameter
+    - Support the "Expression" control
+    - Fix an issue where the level of the Sub Osc changed instantly
+    - Modify the "Osc 1 Shape", the "Osc 1 Morph", the "Mixer Noise/Sub Osc", the "Mixer Osc Mix", and the "Filter Cutoff" to change more quickly
+    - Modify the Presets
+    - PRA32-U2 Editor: Modify the Editor Presets
+    - PRA32-U2/P: Support Shift + Prev/Next Key
+    - PRA32-U2/P: Fix the page names "Amp b" and "Amp c"
+    - Improve the code
+    - Modify the description of the "EG/LFO Mod Dst", the "Voice Mode", and the "LFO Wave" options
+    - Fix the "Wave Table Graphs" in the "README"
+    - Tested with Arduino-Pico version 5.5.0
+- v2.0.0 (2026-01-07):
+    - **Improve the Filter**: Introduce soft clipping (without anti-aliasing)
+    - Change the signal levels
+    - Change the "Chorus Mix" parameter to the "Chorus Level" parameter
+        - When the "Chorus Level" is low, the output level will be low
+    - Add the "After Touch LFO Amt" parameter
+    - Improve stability
+    - PRA32-U2 Editor: Modify the Editor Presets "#131 Electric Organ" and "#132 PWM Lead"
+    - PRA32-U2 Editor: Adjust the layout
+    - PRA32-U2/P: Change the official name of "PRA32-U2 with Panel" to "PRA32-U2/P"
+    - PRA32-U2/P: Add the "Panic" function
+    - Improve the scripts
+    - Fix an issue where pra32-u2-make-sample-wav-file does not become polyphonic
+    - Tested with Arduino-Pico version 5.4.4
+- v1.6.0 (2025-12-19):
+    - Add dithering to the audio autput
+    - Clamp the filter outputs: To ensure safety even when the filters are oscillating due to the LFO
+    - Smoothly change Filter Resonance
+    - Improve real-time performance
+    - Modify Filter Cutoff and Filter Key Track of Factory Presets
+    - PRA32-U2 Editor: Modify Filter Cutoff and Filter Key Track of Editor Presets
+    - PRA32-U2 Editor: Adjust the layout
+    - PRA32-U2 with Panel: Change Seq Transpose to Seq Pitch Ofst (Offset)
+    - PRA32-U2 with Panel: Adjust the display position of the current program number
+    - PRA32-U2 with Panel: Improve documentation
+    - Improve the code
+    - Tested with Arduino-Pico version 5.4.4
+- v1.5.0 (2025-11-01):
+    - Remove Paraphonic Mode form Voice Mode
+    - Change EG/LFO Osc Amt/Dst to EG/LFO Mod Amt/Dst
+    - Add Filter Cutoff (F) to EG/LFO Mod Dst
+    - Increase Chorus Mix of the Presets
+    - Modify the Presets "#0 Synth Pad" and "#5 Sync Lead"
+    - PRA32-U2 Editor: Modify the Editor Only Preset "#128 Synth Brass"
+    - Other improvements
+    - Tested with Arduino-Pico version 5.4.2
+- v1.4.2 (2025-10-22):
+    - PRA32-U2 with Panel: Fix an issue where "Write Program 0" corrupt the panel parameters
+    - PRA32-U2 with Panel: Fix an issue where "Write Panel Prms" corrupt the program #0
+    - Tested with Arduino-Pico version 5.4.0
+- v1.4.1 (2025-10-20):
+    - PRA32-U2 with Panel: Fix an issue where "Write Panel Prms" is not functioning
+    - Tested with Arduino-Pico version 5.4.0
+- v1.4.0 (2025-10-13):
+    - Fix PRA32_U2_VERSION of "Digital-Synth-PRA32-U2.ino"
+    - Change the programs #0-7 to user presets and #8-15 to factory presets
+    - Change the default program to #0
+    - Rename User Programs to User Presets, Presets to Factory Presets, and Editor Only Presets to Editor Presets
+    - PRA32-U2 Editor: Rename the button "Random Ctrl" to "Random Synth"
+    - PRA32-U2 Editor: Change "EG Amp Mod" and "Release = Decay" by "Random Synth"
+    - PRA32-U2 with Panel: Change the Shift key to SW5
+    - PRA32-U2 with Panel: Add Prog -/+ Key as SW3/SW4 (optional)
+    - Tested with Arduino-Pico version 5.2.1
+- v1.3.3 (2025-10-12):
+    - Lower Chorus Mix of the Presets and the Editor Only Presets
+    - Modify the Presets "#0 Synth Pad" and "#5 Sync Lead"
+    - PRA32-U2 Editor: Modify the Editor Only Preset "#128 Synth Brass"
+    - PRA32-U2 with Panel: Improve the README
+    - Fix comments
+    - Tested with Arduino-Pico version 5.2.1
+- v1.3.2 (2025-09-29):
+    - PRA32-U2 Editor: Fix the Editor Only Presets "#128 Synth Brass" and "#130 WT Pad"
+    - Tested with Arduino-Pico version 5.2.1
+- v1.3.1 (2025-09-29):
+    - PRA32-U2 with Panel: Make SW0 non-omittable; Add SW4 and SW5 as Reserved
+    - PRA32-U2 with Panel: Add an example of construction using a universal PCB
+    - Tested with Arduino-Pico version 5.2.1
+- v1.3.0 (2025-09-23):
+    - Modify the EG/Amp Attack/Decay/Release of the preset programs
+    - PRA32-U2 with Panel: Improve the image of the circuit diagram
+    - PRA32-U2 with Panel: Change the image showing an example of construction by a breadboard
+        - Fix an issue where ADC_VREF is being used instead of 3V3(OUT)
+    - Improve documentation
+    - Tested with Arduino-Pico version 5.1.0
+- v1.2.0 (2025-09-21):
+    - Lower the Amp's output level
+    - Change the value 127 of Osc 1 Shape to mean 128
+    - Modify the Preset "#2 FM Piano"
+    - PRA32-U2 Editor: Modify the Editor Only Preset "#133 Square Lead"
+    - PRA32-U2 Editor: Allow Software Kbd Transpose +60
+    - PRA32-U2 Editor: Improve stability when using Hairless MIDI<->Serial Bridge on Windows
+    - PRA32-U2 Editor: Fix the layout
+    - Modify pra32-u2-sample-midi-stream
+    - Improve documentation
+        - Note that PWM Audio is CURRENTLY NOT RECOMMENDED
+    - Tested with Arduino-Pico version 5.1.0
+- v1.1.1 (2025-09-13):
+    - Fix an issue where the Triangle Wave was output as a Saw Wave in Osc 1 Wave
+    - PRA32-U2 Editor: Modify the Editor Only Preset "#131 Electric Organ"
+    - Tested with Arduino-Pico version 5.1.0
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v1.1.0 (2025-09-01):
+    - Change the Filter Resonance so that if Q is more than 2.8 (control value 80), the sound is reduced
+    - Modify Filter Cutoff to change more slowly
+    - Tested with Arduino-Pico version 5.0.0
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v1.0.1 (2025-08-31):
+    - Improve the accuracy of filter calculations
+    - Change the minimum effective Filter Cutoff value to 16 (f = 32.7 Hz) to prevent filter instability
+    - Modify Filter Cutoff to change more slowly
+    - Improve documentation
+    - Tested with Arduino-Pico version 5.0.0
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v1.0.0 (2025-08-31):
+    - Change the preset programs
+    - Tested with Arduino-Pico version 5.0.0
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v0.8.0 (2025-08-24):
+    - Increase the effect of Breath Filter Amt (2x)
+    - Improve the resolution of Mixer Noise/Sub Osc and LFO Depth
+    - Extend EG Osc Amt and LFO Osc Amt (Pitch) range
+    - Change the meaning values 0, 1, and 127 of EG Osc Amt and LFO Osc Amt (Shape)
+    - Change the preset programs
+    - PRA32-U2 with Panel: Rename Filter EG Amt in the EG pages to EG Filter Amt
+        - NOTE: The parameters Filter EG Amt and EG Filter Amt are the same
+    - Fix documentation
+    - Tested with Arduino-Pico version 4.7.1
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v0.7.0 (2025-08-16):
+    - Change Wave Tables with Constraints (Wave Table 0-5)
+    - Change the preset programs
+    - Add Wave Table Graphs to README
+    - Other improvements
+    - Tested with Arduino-Pico version 4.7.1
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v0.6.0 (2025-08-13):
+    - Add Wave Table with Constraints (WT) to Osc 1 Wave
+    - Improve Oscillator wave tables to include more harmonics
+    - Increase the effect of Filter EG Amt and LFO Filter Amt (2x)
+    - Change the LFO Wave display "SH" to "S&H" (Sample & Hold)
+    - Change the Preset programs
+    - PRA32-U2 Editor: Add markers
+    - Other improvements
+    - Discontinue the binary release of "Digital-Synth-PRA32-U2-PWM-Audio.uf2"
+    - Tested with Arduino-Pico version 4.7.1
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+- v0.5.1 (2025-08-03):
+    - Change the Preset programs
+    - Fix a problem where sampling does not occur at Note On when LFO Wave is Sample & Hold (SH)
+    - Improve documentation
+    - Tested with Arduino-Pico version 4.6.1
+    - KNOWN ISSUE: When using PWM Audio, signal discontinuity occurs approximately every 60-80 milliseconds
+        - Click noise is particularly noticeable in the high frequency band and sine waves
+- v0.5.0 (2025-08-03):
+    - Add the Delay Level control
+    - Change the control number of Chorus Mix (34 -> 93)
+    - Change the effectiveness of Osc 1 Shape for Sync Square
+    - Improve Filter Resonance accuracy (4x)
+    - Change the Filter Resonance so that if Q is less than 4, the sound is not reduced
+    - Extend Filter Key Track range and resolution (0.0 to 1.0, step 0.5 -> -1.000 to +1.000, step 0.125)
+    - Change the meaning of LFO Rate value 0 to 0.0Hz
+    - Reduce the output level in monophonic modes
+    - Add interporation for Sync Square
+    - Extend Oscillator, Filter, and Amp inputs and outputs to 24-bit (int32_t)
+    - Extend Chorus FX and Delay FX inputs and outputs to 24-bit (int32_t)
+    - Improve smooth changes of Osc 1 Shape, Filter Cutoff, and Delay Time
+    - Change the Preset programs
+    - PRA32-U2 Editor: Change the layout
+    - PRA32-U2 with Panel: Add Seq T/Rx St/Sp (Transmit/Receive Start/Stop)
+    - PRA32-U2 with Panel: Add Shift Key as SW3 (optional)
+    - PRA32-U2 with Panel: Change to send clocks even when the Step Sequencer is not playing
+    - PRA32-U2 with Panel: Change the meaning of Pitch value 0 to Off
+    - PRA32-U2 with Panel: Change the page layout
+    - PRA32-U2 with Panel: Change SW0, SW2, and VR2 omittable
+    - Fix a problem with EG/Amp Sustain level not changing in note on states
+    - Fix a problem where Filter Key Track correction was off to the plus side
+    - Fix a problem in which High Pass is selected when Filter Mode value is 1
+    - Reduce noise when changing Osc 1 Wave
+    - Reduce SRAM usage: Move g_filter_lpf_table_* to QSPI flash
+    - Tested with Arduino-Pico version 4.6.1
+- v0.4.0 (2025-06-30):
+    - Increase the maximum overtone of Oscillator output in the low frequency range
+    - Merge Osc 1 Multi Saw to Saw Wave
+    - Enable Osc 1 Morph for Multi Saw
+    - Enable Osc 1 Shape and Morph for Sync Square
+    - Improve Filter Cutoff frequency accuracy (4x)
+    - Change the signal flow: Change the points at which the levels change
+    - Extend Delay Time range (1 to 333.3 -> 1 to 340 ms)
+    - Revert the specification change of Chorus Mix
+    - Change the Preset and the Editor Only Preset programs
+    - PRA32-U2 with Panel: Change the specification of Seq Tempo to BPM 56-300
+    - PRA32-U2 with Panel: Change analog input parameters
+    - Fix the problem that PRA32_U2_USE_DEBUG_PRINT does not work correctly  if PRA32_U2_USE_CONTROL_PANEL is not defined
+    - Tested with Arduino-Pico version 4.6.0
+- v0.3.0 (2025-05-10):
+    - Renew High Pass Filter: No noise when changing Resonance
+    - PRA32-U2 with Panel: Easier to change MIDI Ch
+    - Tested with Arduino-Pico version 4.5.3
+- v0.2.0 (2025-02-17):
+    - Change the Preset programs
+    - Change the control numbers of Control Changes
+    - Change the meanings of the values of Osc 1 and 2 Wave
+        - Add Multi Saw to Osc 1 Wave
+    - Change the specification of Chorus Mix
+    - Simplify the meanings of the values of Control Changes
+    - PRA32-U Editor: Add Editor Only Preset programs
+    - Improve documentation
+    - Tested with Arduino-Pico version 4.4.3
+- v0.1.0 (2025-01-19):
+    - Specification is similar to PRA32-U v3.1.0
+    - Optimize processing for Raspberry Pi Pico 2/RP2350
+    - Improve documentation
+    - Tested with Arduino-Pico version 4.4.1
+- v0.0.1 (2025-01-19):
+    - Specification is similar to PRA32-U v3.1.0
+    - PRA32-U2 with Panel: Change the circuit and use INPUT_PULLUP (instead of INPUT_PULLDOWN) to avoid RP2350-E9 Erratum
+    - Tested with Arduino-Pico version 4.4.1

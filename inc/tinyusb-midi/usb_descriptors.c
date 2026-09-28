@@ -49,9 +49,15 @@ tusb_desc_device_t const desc_device =
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
     .bcdUSB             = 0x0200,
+#if CFG_TUD_CDC
+    .bDeviceClass       = TUSB_CLASS_MISC,
+    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+#else
     .bDeviceClass       = 0x00,
     .bDeviceSubClass    = 0x00,
     .bDeviceProtocol    = 0x00,
+#endif
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
     .idVendor           = 0x6666, // Reserved for prototyping
@@ -81,10 +87,14 @@ enum
 {
   ITF_NUM_MIDI = 0,
   ITF_NUM_MIDI_STREAMING,
+#if CFG_TUD_CDC
+  ITF_NUM_CDC,
+  ITF_NUM_CDC_DATA,
+#endif
   ITF_NUM_TOTAL
 };
 
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_MIDI_DESC_LEN)
+#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_MIDI_DESC_LEN + CFG_TUD_CDC * TUD_CDC_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
   // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
@@ -107,6 +117,9 @@ uint8_t const desc_fs_configuration[] =
 
   // Interface number, string index, EP Out & EP In address, EP size
   TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 0, EPNUM_MIDI_OUT, (0x80 | EPNUM_MIDI_IN), 64)
+#if CFG_TUD_CDC
+  ,TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, 0x82, 8, 0x03, 0x83, 64)
+#endif
 };
 
 #if TUD_OPT_HIGH_SPEED
@@ -117,6 +130,9 @@ uint8_t const desc_hs_configuration[] =
 
   // Interface number, string index, EP Out & EP In address, EP size
   TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 0, EPNUM_MIDI_OUT, (0x80 | EPNUM_MIDI_IN), 512)
+#if CFG_TUD_CDC
+  ,TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 0, 0x82, 8, 0x03, 0x83, 64)
+#endif
 };
 #endif
 

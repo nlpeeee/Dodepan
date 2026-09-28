@@ -66,6 +66,16 @@ const char *instrument_names[] = {
     "Robot Voice",
     "Synthwave",
     "Bleep Bloop",
+#if DODEPAN_ENGINE_218
+    "Synth Pad",
+    "M Saw Pad",
+    "FM Piano",
+    "Simple",
+    "Saw Lead",
+    "Sync Lead",
+    "Synth Bass",
+    "Initial",
+#else
     "Fifth Lead",
     "Strings",
     "Brass",
@@ -74,10 +84,21 @@ const char *instrument_names[] = {
     "PWM Lead",
     "Elec. Piano",
     "Square Tone",
+#endif
     "User 1",
     "User 2",
     "User 3",
     "User 4",
+#if DODEPAN_ENGINE_218
+    "Synth Brs",
+    "Synth Str",
+    "WT Pad",
+    "Elec Organ",
+    "Fifth Lead",
+    "Sqr Lead",
+    "PWM Lead",
+    "---",
+#endif
 };
 
 const char *chord_mode_names[] = {
@@ -85,6 +106,7 @@ const char *chord_mode_names[] = {
     "Power",
     "Triad",
     "Octave",
+    "Tilt",
 };
 
 const char *arp_pattern_names[] = {

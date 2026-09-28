@@ -66,6 +66,8 @@ looper_state_t looper_get_state();
 uint32_t looper_get_elapsed_ms();
 uint32_t looper_get_max_length_ms();
 void looper_task();
+bool looper_recording_limited(void);
+uint32_t looper_missed_cycles(void);
 
 // Looper playback hooks - implemented in main.cpp with C linkage
 void looper_send_note_on(uint8_t note, uint8_t velocity);

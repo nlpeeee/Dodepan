@@ -1,3 +1,4 @@
+#include "volume_control.h"
 #include "pico/stdlib.h"
 #include "state.h"
 #include "config.h"
@@ -116,19 +117,15 @@ uint8_t get_instrument() {
 }
 
 void set_instrument(uint8_t instrument) {
-    state.instrument = instrument;
+    state.instrument = instrument<INSTRUMENT_COUNT?instrument:0;
 }
 
 void set_instrument_up() {
-    uint8_t instrument = get_instrument();
-    if(instrument < 11 + NUM_PRESET_SLOTS) { instrument++; }
-    set_instrument(instrument);
+    set_instrument(instrument_menu_step(get_instrument(),true));
 }
 
 void set_instrument_down() {
-    uint8_t instrument = get_instrument();
-    if(instrument > 0) { instrument--; }
-    set_instrument(instrument);
+    set_instrument(instrument_menu_step(get_instrument(),false));
 }
 
 /* Chord Mode */
@@ -153,7 +150,7 @@ void set_chord_mode_down() {
 }
 
 /* Context */
-uint8_t get_context() {
+context_t get_context() {
     return state.context;
 }
 
@@ -162,7 +159,7 @@ void set_context(context_t context) {
 }
 
 /* Selection */
-uint8_t get_selection() {
+selection_t get_selection() {
     return state.selection;
 }
 
@@ -242,12 +239,12 @@ uint8_t get_volume() {
 }
 
 void set_volume(uint8_t vol) {
-    state.volume = vol;
+    state.volume = volume_clamp(vol);
 }
 
 void set_volume_up() {
     uint8_t volume = get_volume();
-    if (volume < 8) {
+    if (volume < VOLUME_MAX) {
         set_volume(volume + 1);
     }
 }

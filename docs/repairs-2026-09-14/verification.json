@@ -1,0 +1,29 @@
+{
+  "baseline_head": "22da4271408380be935113080bb9d49eec3a27cc",
+  "current_head": "22da4271408380be935113080bb9d49eec3a27cc",
+  "baseline_files": 180,
+  "missing_baseline_files": [],
+  "changed_baseline_files": [
+    "CMakeLists.txt",
+    "arpeggiator.c",
+    "config.h",
+    "demo_player.c",
+    "display/display.c",
+    "imu.c",
+    "imu.h",
+    "instrument_preset.h",
+    "lib/sound_i2s/sound_i2s.c",
+    "lib/sound_i2s/sound_i2s.h",
+    "lib/sound_i2s/sound_i2s_16bits.pio",
+    "looper.c",
+    "looper.h",
+    "main.cpp",
+    "state.c",
+    "touch.c",
+    "touch.h"
+  ],
+  "engine_files_checked": 58,
+  "engine_byte_identical_to_audit_baseline": true,
+  "staged_patch_unchanged": true,
+  "original_uf2_sha256": "7b9b4c066fe2a7021e184df883eee5ad8f4a8411af929888c9845e28d2aafc23"
+}

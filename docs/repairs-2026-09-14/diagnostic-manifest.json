@@ -1,0 +1,522 @@
+{
+  "baseline": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 288000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=288000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1099648\t      0\t 170792\t1270440\t 1362a8\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2934112,
+          "sha256": "454f3dab48cec2c4abc3d8a230dc7fdee6558820b245d1bbd80fd95a2fa48e78"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2187776,
+          "sha256": "8f162f90ddefc64f0190943c81bd4396dc51f93a0fc9d13a0a3cdd2217942dd0"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1093508,
+          "sha256": "f2e1af754e2e66e9cec84320df6acfb04fdf2448b5d231d0eb648bbf7b06f1c1"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 311808,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "clock150": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 150000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=150000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1099648\t      0\t 170792\t1270440\t 1362a8\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2934112,
+          "sha256": "01a75c727552fdb1aad505b4d61e6059a497a803d3cd9ca259e6c38064845050"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2187776,
+          "sha256": "4b3fd9ce8f7573c8f39229384969c78cbf0713aa159d2b3446cdfb37fbc11062"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1093508,
+          "sha256": "05d944d75730e04dc482740f4bbeffae0678e5f99023233445b4c1f058b04db9"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 311808,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "clock192": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 192000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=192000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1099648\t      0\t 170792\t1270440\t 1362a8\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2934112,
+          "sha256": "993580317003df5225557dda727f9c9c5afaa1d4d2cae353e6e521be6e154c54"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2187776,
+          "sha256": "2693d45e8de383aaafa7bac425994a4cc7182538469d44b25d99913c4cf296af"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1093508,
+          "sha256": "7568dfc5df7b5c493724d60981cbc8c756716a521e82b02a519bdb727a8f4252"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 311808,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "clock240": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 240000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=240000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1099648\t      0\t 170792\t1270440\t 1362a8\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2934112,
+          "sha256": "fd9320694c3c5ac56bac4ed62bf8c920c3d7dac7978ffbafb213975e0410050a"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2187776,
+          "sha256": "6c71b75d7d9b6d2f98041b5dd2e17a0a5def3b9655702105a145081c13de9b22"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1093508,
+          "sha256": "3e6b73477c4904557f4b52dbd6c8b040e9ddec5602c575e9abeda7bebbea4a9b"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 311808,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "buffer256": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 288000,
+      "DODEPAN_BUFFER_FRAMES": 256,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=288000",
+          "-DDODEPAN_BUFFER_FRAMES=256",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1099648\t      0\t 170792\t1270440\t 1362a8\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2934096,
+          "sha256": "e09dbdf9b9d32bcd03295260811b254e833cc524c3811f1dc04876b6ece2199e"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2187776,
+          "sha256": "bb21df335826b5e89f8ff6e21e2e7fe4ce35577a66d443af957ef5bfdde0f56b"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1093508,
+          "sha256": "b7c053f74e4cb45388acfde2b9c456729173d6bcbbf29304375032e43ec47cdf"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 311808,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "no-display": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 288000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "ON",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=288000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=ON",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1079584\t      0\t 170764\t1250348\t 13142c\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2862116,
+          "sha256": "96b5273ecc7eb92a26e54923e01a7db2ec1cce5542c71f51cc431df6eab21122"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2147840,
+          "sha256": "c8c76ed55c7415cadbb02cc82d63d1d0757f973a22b6926774c1f6587fcaa7ff"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1073444,
+          "sha256": "6905c8eaf50d625d825c942169d8c50113d5c85856b99c2fa939b1c4a388d6f9"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 307676,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "no-imu": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 288000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "ON",
+      "DODEPAN_DISABLE_PERSISTENCE": "OFF",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=288000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=ON",
+          "-DDODEPAN_DISABLE_PERSISTENCE=OFF",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1094960\t      0\t 170600\t1265560\t 134f98\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2880996,
+          "sha256": "d3cc6466372c15351df82e73229f6325d71ec2a4b5ff8aa754e86e70d86e14bb"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2178560,
+          "sha256": "a77935798a99973db0564820141a403e71900bbc0bdd5e3539ee9c645b002260"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1088820,
+          "sha256": "7fc19b6691dc957a490cd79e43ea5cf38565d40da429842608361dc7b8db1a12"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 311608,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  },
+  "no-saves": {
+    "settings": {
+      "DODEPAN_CLOCK_KHZ": 288000,
+      "DODEPAN_BUFFER_FRAMES": 128,
+      "DODEPAN_DISABLE_DISPLAY": "OFF",
+      "DODEPAN_DISABLE_IMU": "OFF",
+      "DODEPAN_DISABLE_PERSISTENCE": "ON",
+      "DODEPAN_UART_DIAGNOSTICS": "ON"
+    },
+    "result": {
+      "commands": [
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "-S",
+          "E:\\PICO\\dodepan\\Dodepan",
+          "-B",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "-G",
+          "Ninja",
+          "-DPICO_BOARD=pico2",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+          "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+          "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+          "-DDODEPAN_CLOCK_KHZ=288000",
+          "-DDODEPAN_BUFFER_FRAMES=128",
+          "-DDODEPAN_DISABLE_DISPLAY=OFF",
+          "-DDODEPAN_DISABLE_IMU=OFF",
+          "-DDODEPAN_DISABLE_PERSISTENCE=ON",
+          "-DDODEPAN_UART_DIAGNOSTICS=ON"
+        ],
+        [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+          "--build",
+          "E:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build",
+          "--parallel",
+          "4"
+        ]
+      ],
+      "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+      "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+      "configure_exit_code": 0,
+      "build_exit_code": 0,
+      "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1097528\t      0\t 170280\t1267808\t 135860\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\diagnostic-build\\Dodepan_RP2350.elf\n",
+      "artifacts": {
+        "elf": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.elf",
+          "bytes": 2907188,
+          "sha256": "de9623596d5d34941a95190b1ec83c2b856d39d8950934661b0cbf9f70829fd9"
+        },
+        "uf2": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.uf2",
+          "bytes": 2183680,
+          "sha256": "7565cfe2bb3cbb5301cd596b777f309483d7f9eb2e24397ff3290d5c34200a8f"
+        },
+        "bin": {
+          "path": "build-audit/diagnostic-build/Dodepan_RP2350.bin",
+          "bytes": 1091388,
+          "sha256": "8ea998d43e6bf9ec8aac85f558aea234bcf3d2cc282e73c366c07eacd02a59a0"
+        }
+      },
+      "static_sram_bytes_excluding_heap_stack": 310632,
+      "minimum_reserved_heap_and_stacks_bytes": 10240
+    }
+  }
+}

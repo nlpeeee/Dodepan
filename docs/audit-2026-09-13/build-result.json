@@ -1,0 +1,51 @@
+{
+  "commands": [
+    [
+      "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+      "-S",
+      "E:\\PICO\\dodepan\\Dodepan",
+      "-B",
+      "E:\\PICO\\dodepan\\Dodepan\\build-audit\\firmware",
+      "-G",
+      "Ninja",
+      "-DPICO_BOARD=pico2",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+      "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+      "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin"
+    ],
+    [
+      "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+      "--build",
+      "E:\\PICO\\dodepan\\Dodepan\\build-audit\\firmware",
+      "--parallel",
+      "4"
+    ]
+  ],
+  "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+  "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+  "configure_exit_code": 0,
+  "build_exit_code": 0,
+  "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1066416\t      0\t 145848\t1212264\t 127f68\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\firmware\\Dodepan_RP2350.elf\n",
+  "artifacts": {
+    "elf": {
+      "path": "build-audit/firmware/Dodepan_RP2350.elf",
+      "bytes": 2659328,
+      "sha256": "dbaf73eb1dc62c621d5d56137e8af4c3cd77ad3ad36a30fb74ebd6dbe607e8b3"
+    },
+    "uf2": {
+      "path": "build-audit/firmware/Dodepan_RP2350.uf2",
+      "bytes": 2125312,
+      "sha256": "7b9b4c066fe2a7021e184df883eee5ad8f4a8411af929888c9845e28d2aafc23"
+    },
+    "bin": {
+      "path": "build-audit/firmware/Dodepan_RP2350.bin",
+      "bytes": 1062324,
+      "sha256": "11c0772612d181083dee239b98727788f02a2e6327318977ca1c9c1ec3402c74"
+    }
+  },
+  "static_sram_bytes_excluding_heap_stack": 316192,
+  "minimum_reserved_heap_and_stacks_bytes": 6144,
+  "arm_archive_sha256": "f074615953f76036e9a51b87f6577fdb4ed8e77d3322a6f68214e92e7859888f",
+  "uf2_matches_preexisting_build": false
+}

@@ -16,6 +16,7 @@ typedef enum context {
     CTX_VOLUME,
     CTX_CONTRAST,
     CTX_LOOPER,
+    CTX_DEMO,
     CTX_IMU_CONFIG,
     CTX_ARP_PATTERN,
     CTX_ARP_SPEED,
@@ -36,6 +37,7 @@ typedef enum selection {
     SELECTION_CHORD,
     SELECTION_ARPEGGIO,
     SELECTION_LOOPER,
+    SELECTION_DEMO,
     SELECTION_IMU_CONFIG,
     SELECTION_LAST,
 } selection_t;

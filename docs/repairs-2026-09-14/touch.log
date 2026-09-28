@@ -1,0 +1,5 @@
+PASS touch first onset
+PASS release holds until elapsed threshold
+PASS release after fixed threshold
+PASS short bus fault retains held note
+PASS persistent bus fault releases note

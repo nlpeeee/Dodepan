@@ -1,0 +1,50 @@
+{
+  "commands": [
+    [
+      "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+      "-S",
+      "E:\\PICO\\dodepan\\Dodepan",
+      "-B",
+      "E:\\PICO\\dodepan\\Dodepan\\build-audit\\repaired",
+      "-G",
+      "Ninja",
+      "-DPICO_BOARD=pico2",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+      "-DCMAKE_MAKE_PROGRAM=C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+      "-DPICO_TOOLCHAIN_PATH=E:/PICO/dodepan/Dodepan/build-audit/tools/bin",
+      "-DDODEPAN_UART_DIAGNOSTICS=OFF"
+    ],
+    [
+      "C:\\Program Files (x86)\\Microsoft Visual Studio\\18\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe",
+      "--build",
+      "E:\\PICO\\dodepan\\Dodepan\\build-audit\\repaired",
+      "--parallel",
+      "4"
+    ]
+  ],
+  "sdk_commit": "a1438dff1d38bd9c65dbd693f0e5db4b9ae91779",
+  "compiler": "arm-none-eabi-gcc.exe (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119",
+  "configure_exit_code": 0,
+  "build_exit_code": 0,
+  "size": "   text\t   data\t    bss\t    dec\t    hex\tfilename\n1098032\t      0\t 170248\t1268280\t 135a38\tE:\\PICO\\dodepan\\Dodepan\\build-audit\\repaired\\Dodepan_RP2350.elf\n",
+  "artifacts": {
+    "elf": {
+      "path": "build-audit/repaired/Dodepan_RP2350.elf",
+      "bytes": 2911552,
+      "sha256": "b3ff5fe5dd3a346efab897df1c3d25de982bd6b9fae81e7387c8ed7861792564"
+    },
+    "uf2": {
+      "path": "build-audit/repaired/Dodepan_RP2350.uf2",
+      "bytes": 2184704,
+      "sha256": "9bf4a316e81faac70fcbd0bc8bccb6211e3ab7193ff1cf1758417a2cadd129d6"
+    },
+    "bin": {
+      "path": "build-audit/repaired/Dodepan_RP2350.bin",
+      "bytes": 1091892,
+      "sha256": "a734bb8002806f9e4a8762bef152dde5fa5da196e3e96ef4c1f7e4bc5f5b2ebb"
+    }
+  },
+  "static_sram_bytes_excluding_heap_stack": 311264,
+  "minimum_reserved_heap_and_stacks_bytes": 10240
+}

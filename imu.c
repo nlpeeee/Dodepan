@@ -5,6 +5,7 @@
 #include "MPU6050.h"
 #include <config.h>
 #include "imu.h"
+#include "sensor_math.h"
 #include "i2c_mutex.h"
 
 mpu6050_t mpu6050;
@@ -66,20 +67,6 @@ int16_t peak_hold_get(peak_hold_state_t *state) {
     return state->peak;
 }
 
-inline int16_t mul_fixed(int16_t a, int16_t b) {
-    return (a * b) >> FIXED_POINT_BITS;
-}
-
-inline int16_t sqrt_fixed(int16_t x) {
-    int16_t y = x;
-    int32_t e = FIXED_POINT_SCALE;
-    while (e > 1) {
-        e >>= 1;
-        y = (y + mul_fixed(x, FIXED_POINT_SCALE / y)) >> 1;
-    }
-    return y;
-}
-
 void imu_init(){
     mpu6050 = mpu6050_init(MPU6050_I2C_PORT, MPU6050_ADDRESS);
 
@@ -100,7 +87,7 @@ void imu_init(){
 }
 
 // Overriding rpi-pico-mpu6050 library methods for minimal, fixed-point calculations
-void read_raw_accel_fixed(struct mpu6050 *self) {
+bool read_raw_accel_fixed(struct mpu6050 *self) {
     struct i2c_information *i2c = &self->i2c;
     uint8_t data[6];
 
@@ -110,12 +97,13 @@ void read_raw_accel_fixed(struct mpu6050 *self) {
 
     // Read raw accelerometer data
     uint8_t reg = 0x3B; // ACCEL_XOUT_H
-    i2c_write_timeout_us(i2c->instance, i2c->address, &reg, 1, true, 3000);
-    i2c_read_timeout_us(i2c->instance, i2c->address, data, 6, false, 3000);
+    if(i2c_write_timeout_us(i2c->instance, i2c->address, &reg, 1, true, 3000)!=1 ||
+       i2c_read_timeout_us(i2c->instance, i2c->address, data, 6, false, 3000)!=6)return false;
 
     self->ra.x = data[0] << 8 | data[1];
     self->ra.y = data[2] << 8 | data[3];
     self->ra.z = data[4] << 8 | data[5];
+    return true;
 }
 
 int16_t abs_fixed(int16_t x) {
@@ -135,8 +123,14 @@ int16_t map_14(int16_t value) {
 void imu_task(Imu_data * data) {
     // Acquire I2C lock before reading IMU data
     i2c1_mutex_enter();
-    read_raw_accel_fixed(&mpu6050);
+    bool valid=read_raw_accel_fixed(&mpu6050);
     i2c1_mutex_exit();
+    static uint64_t last_good_us;
+    if(!valid){
+        if(time_us_64()-last_good_us>=250000){data->available=false;data->deviation_x=8192;data->deviation_y=64;data->acceleration=100;data->tilt_zone=4;}
+        return;
+    }
+    last_good_us=time_us_64();data->available=true;
     
     struct mpu6050_vector16 *accel = &mpu6050.ra;
 
@@ -147,9 +141,7 @@ void imu_task(Imu_data * data) {
     int16_t az = (accel->z * 493) / FIXED_POINT_SCALE;
 
     // Calculate the total motion acceleration (which is not linear since we have not accounted for gravity)
-    int16_t tot_accel = sqrt_fixed(mul_fixed(accel->x, accel->x) +
-                               mul_fixed(accel->y, accel->y) +
-                               mul_fixed(accel->z, accel->z));
+    int16_t tot_accel = (int16_t)sensor_magnitude(accel->x,accel->y,accel->z);
 
     static int16_t prev_tot_accel;
     int16_t delta_accel = abs_fixed(prev_tot_accel - tot_accel);
@@ -176,4 +168,39 @@ void imu_task(Imu_data * data) {
 
     // Acceleration goes to velocity
     data->acceleration = (map_7(peak_hold_get(&peak_hold) * VELOCITY_MULTIPLIER));
+
+    // Calculate tilt zone (3x3 grid) with hysteresis for chord voicing
+    // Zone layout:  0 1 2   (top row, Y up)
+    //               3 4 5   (middle row)
+    //               6 7 8   (bottom row, Y down)
+    static uint8_t last_zone = 4; // Start at center
+    static int16_t last_ax = 0;
+    static int16_t last_ay = 0;
+    
+    // Apply hysteresis: only change zone if movement exceeds threshold
+    int16_t delta_ax = abs_fixed(ax - last_ax);
+    int16_t delta_ay = abs_fixed(ay - last_ay);
+    
+    if (delta_ax > (TILT_HYSTERESIS >> 6) || delta_ay > (TILT_HYSTERESIS >> 6)) {
+        last_ax = ax;
+        last_ay = ay;
+        
+        // Map ax to column (0=left, 1=center, 2=right)
+        // ax range is roughly -128 to 128 after scaling
+        // Lower threshold (25) makes corner zones easier to reach
+        uint8_t col;
+        if (ax < -25) col = 0;       // Left tilt
+        else if (ax > 25) col = 2;  // Right tilt
+        else col = 1;                // Center
+        
+        // Map ay to row (0=up, 1=center, 2=down)
+        uint8_t row;
+        if (ay > 25) row = 0;        // Tilted up (away)
+        else if (ay < -25) row = 2; // Tilted down (toward)
+        else row = 1;                // Center
+        
+        last_zone = row * 3 + col;
+    }
+    
+    data->tilt_zone = last_zone;
 }

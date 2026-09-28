@@ -1,0 +1,31 @@
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp: In function 'void smoke()':
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp:12:88: error: no matching function for call to 'PRA32_U2_Synth<false, false, false, 0, false, false>::note_off(int)'
+   12 | void smoke() { int16_t right; synth.initialize(); synth.note_on(60,100); synth.note_off(60); synth.control_change(74,64); synth.program_change(0); synth.current_controller_value(74); synth.secondary_core_process(); synth.process(right); }
+      |                                                                          ~~~~~~~~~~~~~~^~~~
+E:\PICO\dodepan\Dodepan\build-audit\upstream-v2.18.2\Digital-Synth-PRA32-U2/pra32-u2-synth.h:783:41: note: candidate: 'void PRA32_U2_Synth<NO_FX, EXT_INPUT, EXT_OUTPUT, SYNTH_ID, MONO_LEVEL_DOWN, RESTRICT_POLY_AND_CORES>::note_off(uint8_t, uint8_t) [with bool NO_FX = false; bool EXT_INPUT = false; bool EXT_OUTPUT = false; long unsigned int SYNTH_ID = 0; bool MONO_LEVEL_DOWN = false; bool RESTRICT_POLY_AND_CORES = false; uint8_t = unsigned char]'
+  783 |   /* INLINE */ void __not_in_flash_func(note_off)(uint8_t note_number, uint8_t velocity) {
+      |                                         ^~~~~~~~
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp:7:32: note: in definition of macro '__not_in_flash_func'
+    7 | #define __not_in_flash_func(x) x
+      |                                ^
+E:\PICO\dodepan\Dodepan\build-audit\upstream-v2.18.2\Digital-Synth-PRA32-U2/pra32-u2-synth.h:783:41: note:   candidate expects 2 arguments, 1 provided
+  783 |   /* INLINE */ void __not_in_flash_func(note_off)(uint8_t note_number, uint8_t velocity) {
+      |                                         ^~~~~~~~
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp:7:32: note: in definition of macro '__not_in_flash_func'
+    7 | #define __not_in_flash_func(x) x
+      |                                ^
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp:12:229: error: no matching function for call to 'PRA32_U2_Synth<false, false, false, 0, false, false>::process(int16_t&)'
+   12 | void smoke() { int16_t right; synth.initialize(); synth.note_on(60,100); synth.note_off(60); synth.control_change(74,64); synth.program_change(0); synth.current_controller_value(74); synth.secondary_core_process(); synth.process(right); }
+      |                                                                                                                                                                                                                        ~~~~~~~~~~~~~^~~~~~~
+E:\PICO\dodepan\Dodepan\build-audit\upstream-v2.18.2\Digital-Synth-PRA32-U2/pra32-u2-synth.h:1503:44: note: candidate: 'template<bool BYPASS_SYNTH, bool BYPASS_FX, bool RESTRICT_SAW, bool RESTRICT_SQR_WT> int16_t PRA32_U2_Synth<NO_FX, EXT_INPUT, EXT_OUTPUT, SYNTH_ID, MONO_LEVEL_DOWN, RESTRICT_POLY_AND_CORES>::process(int32_t, int32_t, int16_t&, int32_t&, int32_t&) [with bool BYPASS_SYNTH = BYPASS_SYNTH; bool BYPASS_FX = BYPASS_FX; bool RESTRICT_SAW = RESTRICT_SAW; bool RESTRICT_SQR_WT = RESTRICT_SQR_WT; bool NO_FX = false; bool EXT_INPUT = false; bool EXT_OUTPUT = false; long unsigned int SYNTH_ID = 0; bool MONO_LEVEL_DOWN = false; bool RESTRICT_POLY_AND_CORES = false]'
+ 1503 |   /* INLINE */ int16_t __not_in_flash_func(process)(int32_t audio_input_l_int32, int32_t audio_input_r_int32, int16_t& right_output_int16, int32_t& audio_output_l_int32 = s_placeholder_int32, int32_t& audio_output_r_int32 = s_placeholder_int32) {
+      |                                            ^~~~~~~
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp:7:32: note: in definition of macro '__not_in_flash_func'
+    7 | #define __not_in_flash_func(x) x
+      |                                ^
+E:\PICO\dodepan\Dodepan\build-audit\upstream-v2.18.2\Digital-Synth-PRA32-U2/pra32-u2-synth.h:1503:44: note:   candidate expects 3 arguments, 1 provided
+ 1503 |   /* INLINE */ int16_t __not_in_flash_func(process)(int32_t audio_input_l_int32, int32_t audio_input_r_int32, int16_t& right_output_int16, int32_t& audio_output_l_int32 = s_placeholder_int32, int32_t& audio_output_r_int32 = s_placeholder_int32) {
+      |                                            ^~~~~~~
+E:\PICO\dodepan\Dodepan\build-audit\v2.18.2-old-api-api.cpp:7:32: note: in definition of macro '__not_in_flash_func'
+    7 | #define __not_in_flash_func(x) x
+      |                                ^

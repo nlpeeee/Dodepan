@@ -1,0 +1,8 @@
+PASS adjacent CC coalescing
+PASS CC cannot cross note boundary
+PASS applied mirror follows consumption
+PASS atomic preset and ordered full capture
+PASS overflow requests explicit panic
+PASS overflow panic reaches engine
+PASS bounded per-buffer event budget
+PASS all queued note-offs delivered

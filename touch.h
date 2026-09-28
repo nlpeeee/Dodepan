@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 void mpr121_i2c_init();
+bool touch_any_held(void);
 void mpr121_task();
 
 extern void touch_on(uint8_t id);

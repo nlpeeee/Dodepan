@@ -23,39 +23,28 @@ void mpr121_i2c_init(){
 }
 
 
-// Perform a second pass of debouncing to better deal with long presses
-static bool debounced_states[12] = {false};
-static int debounce_counters[12] = {0};
-static inline bool mpr121_debounce(uint8_t i, bool is_touched) {
-    if (is_touched) { // Do not filter positive readings
-            debounced_states[i] = true;
-            debounce_counters[i] = 0;
-        } else if (!is_touched && debounced_states[i]) {
-            debounce_counters[i]++;
-            if (debounce_counters[i] >= MPR121_DEBOUNCE_THRESHOLD) {
-                debounced_states[i] = false;
-                debounce_counters[i] = 0;
-            }
-        }
-
-    return debounced_states[i];
-}
-
+// Fixed-time release filtering is independent of display/USB loop load.
+static uint16_t touched_mask,raw_mask;
+static uint64_t last_poll_us,last_valid_us,started_us,release_since[12];
+bool touch_any_held(void){return raw_mask!=0 || touched_mask!=0;}
 void mpr121_task(){
-    bool is_touched;
-    static bool was_touched[12];
-    for(uint8_t i=0; i<12; i++) {
-        mpr121_is_touched(i, &is_touched, &mpr121);
-        is_touched = mpr121_debounce(i, is_touched);
-        if (is_touched != was_touched[i]){
-            if(time_us_32() < 500000) return;  // Ignore readings for half a second,
-                                               // allowing the MPR121 to calibrate.
-            if (is_touched){
-                touch_on(i);
-            } else {
-                touch_off(i);
-            }
-            was_touched[i] = is_touched;
+    uint64_t now=time_us_64();if(now-last_poll_us<2000)return;last_poll_us=now;
+    if(!started_us)started_us=now;
+    uint8_t reg=0,data[2];
+    bool valid=i2c_write_timeout_us(MPR121_I2C_PORT,MPR121_ADDRESS,&reg,1,true,2000)==1 &&
+               i2c_read_timeout_us(MPR121_I2C_PORT,MPR121_ADDRESS,data,2,false,2000)==2;
+    if(valid){raw_mask=((uint16_t)data[0]|((uint16_t)data[1]<<8))&0xfff;last_valid_us=now;}
+    else if(now-last_valid_us<100000)return;
+    else raw_mask=0;
+    if(now-started_us<500000)return;
+    for(uint8_t i=0;i<12;i++){
+        uint16_t bit=1u<<i;
+        if(raw_mask&bit){
+            release_since[i]=0;
+            if(!(touched_mask&bit)){touched_mask|=bit;touch_on(i);}
+        }else if(touched_mask&bit){
+            if(!release_since[i])release_since[i]=now;
+            if(now-release_since[i]>=TOUCH_RELEASE_MS*1000u){touched_mask&=~bit;release_since[i]=0;touch_off(i);}
         }
     }
 }

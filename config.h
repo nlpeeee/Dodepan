@@ -1,9 +1,17 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
 
+#include <stdint.h>
+
 /* Device identifiers */
 #define PROGRAM_NAME                "Dodepan"
-#define PROGRAM_VERSION             "2.5.1"
+#if DODEPAN_ENGINE_218
+#define PROGRAM_VERSION             "2.7.5-test-classics"
+#elif DODEPAN_TRANSPORT_48K
+#define PROGRAM_VERSION             "2.6.0-test-t48-r24"
+#else
+#define PROGRAM_VERSION             "2.6.0-rc4-sram24"
+#endif
 #define PROGRAM_DESCRIPTION         "Portable musical instrument and MIDI controller"
 #define PROGRAM_URL                 "https://turiscandurra.com/circuits"
 #define USB_STR_MANUFACTURER        "TuriScandurra"
@@ -82,8 +90,60 @@
 #define PRA32_U_MIDI_CH             0  // 0-based
 #define g_midi_ch                   PRA32_U_MIDI_CH // Required for compatibility with PRA32-U library
 
-#define AUDIO_BUFFER_LENGTH         64
-#define SOUND_OUTPUT_FREQUENCY      48000
+// Debug: Enable CPU profiling output via USB serial (printf)
+// Uncomment to enable - shows synth CPU % on demo screen, LED on if overload
+#define DEBUG_CPU_PROFILING
+
+// Debug: Disable display refreshes during demo playback to test if I2C causes crackling
+// #define DEBUG_DEMO_NO_DISPLAY  // No longer needed - touch handlers now use deferred refresh
+
+// Debug: Hide the note indicator on screen when keys are pressed
+// Uncomment to test if note indicator drawing causes audio issues
+// #define DEBUG_HIDE_NOTE_INDICATOR
+
+#ifdef DEBUG_CPU_PROFILING
+// Declared in main.cpp, used by display.c
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t get_cpu_avg_percent(void);
+uint32_t get_cpu_max_percent(void);
+void get_audio_error_counts(uint32_t *underruns,uint32_t *late,uint32_t *irq_misses);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
+// Clock speed options (for 48kHz audio, must be multiple of 48kHz)
+// Try lower speeds if experiencing audio crackling on some units
+// Options: 288000 (288MHz), 240000 (240MHz), 192000 (192MHz), 150000 (150MHz default)
+#ifndef SYSTEM_CLOCK_KHZ
+#define SYSTEM_CLOCK_KHZ            288000  // Full overclock for best polyphony
+
+#endif
+
+// Audio buffer size - larger = more latency but more tolerant of timing jitter
+// Try 128 or 256 if experiencing ticking/crackling on some units
+#ifndef AUDIO_BUFFER_LENGTH
+#define AUDIO_BUFFER_LENGTH         128
+#endif
+// Preserve the effective output rate of the original firmware.
+// The PRA32 engine remains unchanged; do not retune its internal sample rate.
+#if DODEPAN_ENGINE_218
+#define SYNTH_RENDER_FREQUENCY      48000
+#else
+#define SYNTH_RENDER_FREQUENCY      24000
+#endif
+#ifndef DODEPAN_TRANSPORT_48K
+#define DODEPAN_TRANSPORT_48K       0
+#endif
+#if DODEPAN_TRANSPORT_48K
+#define AUDIO_TRANSPORT_REPEAT     2
+#else
+#define AUDIO_TRANSPORT_REPEAT     1
+#endif
+#define SOUND_OUTPUT_FREQUENCY     (SYNTH_RENDER_FREQUENCY * AUDIO_TRANSPORT_REPEAT)
+#define AUDIO_TRANSPORT_FRAMES     (AUDIO_BUFFER_LENGTH * AUDIO_TRANSPORT_REPEAT)
 #define PICO_AUDIO_I2S_MONO_OUTPUT
 
 // Event looper limits
@@ -106,7 +166,33 @@
 #define CHORD_POWER     1   // Root + 5th
 #define CHORD_TRIAD     2   // Root + 3rd + 5th
 #define CHORD_OCTAVE    3   // Root + Octave
-#define NUM_CHORD_MODES 4
+#define CHORD_TILT      4   // Tilt-based voicing (IMU selects chord type)
+#define NUM_CHORD_MODES 5
+
+/* Tilt-based chord voicings (3x3 grid mapped to X/Y tilt) */
+// Voicing indices for tilt grid
+#define VOICING_BASE      0   // Center: current base chord
+#define VOICING_AUG       1   // Augmented: [0, 4, 8]
+#define VOICING_DIM       2   // Diminished: [0, 3, 6]
+#define VOICING_MAJ       3   // Major triad: [0, 4, 7]
+#define VOICING_MIN       4   // Minor triad: [0, 3, 7]
+#define VOICING_DOM7      5   // Dominant 7th: [0, 4, 7, 10]
+#define VOICING_MAJ7      6   // Major 7th: [0, 4, 7, 11]
+#define VOICING_MIN7      7   // Minor 7th: [0, 3, 7, 10]
+#define VOICING_SUS4      8   // Suspended 4th: [0, 5, 7]
+#define VOICING_SUS2      9   // Suspended 2nd: [0, 2, 7]
+#define VOICING_6TH       10  // 6th chord: [0, 4, 7, 9]
+#define VOICING_9TH       11  // 9th chord: [0, 4, 7, 10, 14]
+#define NUM_VOICINGS      12
+
+// Tilt zone thresholds (with hysteresis)
+#define TILT_ZONE_LOW     5461   // ~33% of 16383 (14-bit range)
+#define TILT_ZONE_HIGH    10922  // ~67% of 16383
+#define TILT_HYSTERESIS   500    // Dead zone to prevent jitter
+
+// Portamento settings for smooth chord transitions
+#define PORTAMENTO_TIME   40     // CC5 value (0-127), ~40 gives smooth glide
+#define PORTAMENTO_ON     1      // CC65 value to enable portamento
 
 /* Arpeggiator */
 #define ARP_OFF         0   // Arpeggiator disabled
@@ -136,4 +222,29 @@
 #define FLASH_WRITE_DELAY_S         10  // To minimize flash operations, delay writing by this amount of seconds
 #define NUM_PRESET_SLOTS            4
 #define NUM_SCALE_SLOTS             4
+
+
+#ifndef DODEPAN_DISABLE_DISPLAY
+#define DODEPAN_DISABLE_DISPLAY 0
+#endif
+#ifndef DODEPAN_DISABLE_IMU
+#define DODEPAN_DISABLE_IMU 0
+#endif
+#ifndef DODEPAN_DISABLE_PERSISTENCE
+#define DODEPAN_DISABLE_PERSISTENCE 0
+#endif
+#ifndef DODEPAN_UART_DIAGNOSTICS
+#define DODEPAN_UART_DIAGNOSTICS 0
+#endif
+
+#ifndef TOUCH_RELEASE_MS
+#define TOUCH_RELEASE_MS 40
+#endif
+
+#if DODEPAN_DISABLE_DISPLAY
+#undef USE_DISPLAY
+#endif
+#if DODEPAN_DISABLE_IMU
+#undef USE_IMU
+#endif
 #endif /* CONFIG_H_ */

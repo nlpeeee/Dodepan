@@ -1,3 +1,4 @@
+#include "volume_control.h"
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,8 +9,10 @@
 #include "ssd1306.h"        // https://github.com/TuriSc/pico-ssd1306
 #include "state.h"
 #include "looper.h"
+#include "demo_player.h"
 #include "display.h"
 #include "i2c_mutex.h"
+#include "imu.h"
 
 // Include assets
 #include "display_fonts.h"
@@ -28,13 +31,19 @@
 #include "icon_play.h"
 #include "icon_ready.h"
 #include "icon_pause.h"
+#include "icon_demo.h"
 // #include "icon_parameters.h" // Unused asset
 #include "icon_low_batt.h"
 
 #define ICON_CENTERED_MARGIN_X ((SSD1306_WIDTH / 2) - (32 / 2))
 
+// Minimum interval between display updates (in microseconds)
+// 50ms = 20 FPS max, prevents I2C from hogging CPU during rapid input
+#define DISPLAY_MIN_REFRESH_INTERVAL_US 50000
+
 static alarm_id_t display_dim_alarm_id;
 static volatile bool display_pending = false;  // Flag for deferred display updates
+static uint32_t last_display_update_time = 0;  // Rate limiting timestamp
 
 void display_init(ssd1306_t *p) {
     p->external_vcc=false;
@@ -152,6 +161,65 @@ static inline void draw_looper_screen(ssd1306_t *p) {
     }
 }
 
+static inline void draw_demo_screen(ssd1306_t *p) {
+    // Draw demo icon (32x32) if in page selection mode
+    if(get_context() == CTX_SELECTION) {
+        ssd1306_bmp_show_image_with_offset(p, icon_demo_data, icon_demo_size, ICON_CENTERED_MARGIN_X, 0);
+        return;
+    }
+
+    // Row 1: state icon + song name
+    uint8_t state_x = 0;
+    uint8_t state_y = 0;
+
+    if(demo_is_playing()) {
+        ssd1306_bmp_show_image_with_offset(p, icon_play_data, icon_play_size, state_x, state_y);
+    } else {
+        ssd1306_bmp_show_image_with_offset(p, icon_ready_data, icon_ready_size, state_x, state_y);
+    }
+
+    // Song name (truncated if needed)
+    const char *song_name = demo_get_song_name(demo_get_current_song());
+    char name_buf[18];
+    snprintf(name_buf, sizeof(name_buf), "%s", song_name);
+    ssd1306_draw_string(p, 14, 0, 1, name_buf);
+
+    // Row 2: song index and time counter
+    char index_buf[12];
+    snprintf(index_buf, sizeof(index_buf), "%u/%u", 
+        demo_get_current_song() + 1, demo_get_song_count());
+    ssd1306_draw_string(p, 0, 12, 1, index_buf);
+
+    // Time counter - show elapsed only (duration not known until song ends)
+    uint32_t elapsed_ms = demo_get_elapsed_ms();
+    uint32_t elapsed_sec = elapsed_ms / 1000;
+    char time_buf[12];
+    snprintf(time_buf, sizeof(time_buf), "%u:%02u",
+        elapsed_sec / 60, elapsed_sec % 60);
+    ssd1306_draw_string(p, 70, 12, 1, time_buf);
+
+    // Row 3: hint or CPU stats
+    if(get_context() == CTX_DEMO) {
+#ifdef DEBUG_CPU_PROFILING
+        // Alternate recent load and cumulative delivery errors; fit 128 pixels.
+        char cpu_buf[28];
+        uint32_t avg=get_cpu_avg_percent(),peak=get_cpu_max_percent();
+        if((time_us_64()/2000000)&1){
+            uint32_t underruns,late,misses;get_audio_error_counts(&underruns,&late,&misses);
+            snprintf(cpu_buf,sizeof(cpu_buf),"U:%lu L:%lu I:%lu",
+                (unsigned long)(underruns>999?999:underruns),
+                (unsigned long)(late>999?999:late),(unsigned long)(misses>999?999:misses));
+        }else{
+            snprintf(cpu_buf,sizeof(cpu_buf),"%uk A:%lu P:%lu",SOUND_OUTPUT_FREQUENCY/1000,
+                (unsigned long)(avg>999?999:avg),(unsigned long)(peak>999?999:peak));
+        }
+        ssd1306_draw_string(p, 0, 24, 1, cpu_buf);
+#else
+        ssd1306_draw_string(p, 0, 24, 1, "Enc Song | Btn Play/Stop");
+#endif
+    }
+}
+
 static inline void draw_imu_axes_screen(ssd1306_t *p) {
     switch (get_imu_axes()) {
         case 0x0:
@@ -207,6 +275,32 @@ static inline void draw_chord_mode_screen(ssd1306_t *p) {
     uint8_t name_len = strlen(mode_name);
     uint8_t margin_x = (128 - (name_len * 12)) / 2;  // Center for scale 2 font
     ssd1306_draw_string(p, margin_x, 14, 2, mode_name);
+    
+    // For CHORD_TILT mode, show the current tilt zone as a 3x3 grid
+    if (mode == CHORD_TILT) {
+        uint8_t zone = get_tilt_zone();
+        uint8_t row = zone / 3;
+        uint8_t col = zone % 3;
+        
+        // Draw 3x3 grid of dots/squares in bottom right corner
+        uint8_t grid_x = 104;  // Right side of screen
+        uint8_t grid_y = 10;
+        uint8_t cell_size = 6;
+        
+        for (uint8_t r = 0; r < 3; r++) {
+            for (uint8_t c = 0; c < 3; c++) {
+                uint8_t x = grid_x + c * cell_size;
+                uint8_t y = grid_y + r * cell_size;
+                if (r == row && c == col) {
+                    // Current zone - filled square
+                    ssd1306_draw_square(p, x, y, cell_size - 1, cell_size - 1);
+                } else {
+                    // Other zones - small dot
+                    ssd1306_draw_square(p, x + 2, y + 2, 1, 1);
+                }
+            }
+        }
+    }
     
     // Draw selection mark if in edit mode
     if(get_context() == CTX_CHORD) {
@@ -411,7 +505,8 @@ static inline void draw_note_indicator(ssd1306_t *p) {
     const uint8_t note_width = 24;   // key_font width
     const uint8_t sharp_width = 10;  // diesis_font width  
     const uint8_t octave_width = 12; // octave_font width
-    const uint8_t chord_width = 12;  // chord symbol width (standard font at scale 1)
+    // Chord symbol width: tilt mode can show 2-char symbols (M7, s2, s4, au, di)
+    const uint8_t chord_width = (chord_mode == CHORD_TILT) ? 18 : 12;
     
     // Calculate total width
     uint8_t total_width = note_width;  // Note letter
@@ -445,6 +540,18 @@ static inline void draw_note_indicator(ssd1306_t *p) {
             case CHORD_POWER: chord_symbol = "5"; break;
             case CHORD_TRIAD: chord_symbol = "+"; break;
             case CHORD_OCTAVE: chord_symbol = "8"; break;
+            case CHORD_TILT: {
+                // Show actual voicing based on current tilt zone
+                uint8_t zone = get_tilt_zone();
+                // Voicing symbols matching tilt_zone_voicing mapping
+                static const char *voicing_symbols[9] = {
+                    "au", "M",  "7",   // row 0: aug, maj, dom7
+                    "di", "M",  "M7",  // row 1: dim, base(maj), maj7
+                    "s2", "s4", "9",   // row 2: sus2, sus4, 9th
+                };
+                chord_symbol = voicing_symbols[zone < 9 ? zone : 4];
+                break;
+            }
             default: chord_symbol = ""; break;
         }
         ssd1306_draw_string(p, x + 2, 4, 1, chord_symbol);
@@ -469,17 +576,23 @@ static inline void draw_main_screen(ssd1306_t *p) {
     if (scale_name_width > 12) { scale_name_width = 12; }
 
     // Instrument
-    ssd1306_draw_string_with_font(p, OFFSET_X, 21, 1, spaced_font, instrument_names[get_instrument()]);
+    if(get_context()==CTX_VOLUME){
+        char volume_text[12];snprintf(volume_text,sizeof(volume_text),"Volume %u",(unsigned)get_volume());
+        ssd1306_draw_string_with_font(p, OFFSET_X, 21, 1, spaced_font, volume_text);
+    }else{
+        ssd1306_draw_string_with_font(p, OFFSET_X, 21, 1, spaced_font, instrument_names[get_instrument()]);
+    }
     uint8_t instrument_name_width = strlen(instrument_names[get_instrument()]);
     if (instrument_name_width > 12) { instrument_name_width = 12; }
 
     // Volume
-    uint8_t increments = 9; // 0 to 8
+    uint8_t increments = 9; // Eight segments represent the 0-100 setting
+    uint8_t volume_bars=(get_volume()*8+VOLUME_MAX-1)/VOLUME_MAX;
     uint8_t bar_height = 3;
 
     for (uint8_t i = 1; i < increments; i++) {
         uint8_t y = 32 - (bar_height * i + i);
-        if(get_volume() >= i) {
+        if(volume_bars >= i) {
             ssd1306_draw_square(p, 120, y, 7, bar_height);
         } 
     }
@@ -528,8 +641,10 @@ static inline void draw_main_screen(ssd1306_t *p) {
         ssd1306_bmp_show_image_with_offset(p, icon_low_batt_data, icon_low_batt_size, 121, 18);
     }
     
+#ifndef DEBUG_HIDE_NOTE_INDICATOR
     // Visual note indicator - show currently playing note
-    draw_note_indicator(p);
+    if(get_context()!=CTX_VOLUME)draw_note_indicator(p);
+#endif
 }
 
 void display_dim(ssd1306_t *p) {
@@ -589,6 +704,14 @@ void display_update_contrast(ssd1306_t *p) {
 }
 
 void display_draw(ssd1306_t *p) {
+    if(DODEPAN_DISABLE_DISPLAY)return;
+    // Rate limit: skip if called too soon after last update
+    uint32_t now = time_us_32();
+    if ((now - last_display_update_time) < DISPLAY_MIN_REFRESH_INTERVAL_US) {
+        // Still pending, will be serviced on next main loop iteration
+        return;  // Don't clear display_pending - keep it set
+    }
+    
     // Try to acquire I2C lock - if busy, mark as pending and return immediately
     // This prevents blocking note playback while waiting for IMU reads to complete
     if (!i2c1_mutex_try_enter()) {
@@ -596,6 +719,7 @@ void display_draw(ssd1306_t *p) {
         return;
     }
     
+    last_display_update_time = now;  // Update timestamp after successful lock
     display_pending = false;
     selection_t selection = get_selection();
     context_t context = get_context();
@@ -619,6 +743,9 @@ void display_draw(ssd1306_t *p) {
                 break;
                 case SELECTION_LOOPER:
                     draw_looper_screen(p);
+                break;
+                case SELECTION_DEMO:
+                    draw_demo_screen(p);
                 break;
                 case SELECTION_IMU_CONFIG:
                     draw_imu_axes_screen(p);
@@ -650,6 +777,9 @@ void display_draw(ssd1306_t *p) {
         case CTX_LOOPER:
             draw_looper_screen(p);
         break;
+        case CTX_DEMO:
+            draw_demo_screen(p);
+        break;
         case CTX_IMU_CONFIG:
             draw_imu_axes_screen(p);
         break;
@@ -672,6 +802,9 @@ void display_draw(ssd1306_t *p) {
         break;
     }
 
+    extern bool settings_save_pending(void);
+    if(settings_save_pending())ssd1306_draw_string(p,120,0,1,"*");
+    if(looper_recording_limited() && context==CTX_LOOPER)ssd1306_draw_string(p,96,24,1,"Full");
     ssd1306_show(p);
     i2c1_mutex_exit();
 }
